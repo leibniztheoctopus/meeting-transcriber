@@ -1,3 +1,4 @@
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
@@ -43,6 +44,10 @@ class MeetingDetector {
     /// Closure that provides the window list. Defaults to CGWindowListCopyWindowInfo.
     /// Override in tests to inject mock window data.
     var windowListProvider: () -> [[String: Any]] = MeetingDetector.systemWindowList
+
+    /// Closure to verify a Teams window is a real meeting (not a pop-out chat).
+    /// Override in tests to skip AX verification. Default checks for "Leave" button.
+    var meetingVerifier: ((_ pid: pid_t) -> Bool) = MeetingDetector.verifyTeamsMeeting
 
     init(patterns: [AppMeetingPattern], confirmationCount: Int = 2) {
         self.patterns = patterns
@@ -96,6 +101,13 @@ class MeetingDetector {
             if hits >= confirmationCount, let match = firstMatch[appName],
                let pattern = patterns.first(where: { $0.appName == appName }) {
                 let pid = match.window["kCGWindowOwnerPID"] as? Int32 ?? 0
+
+                // Verify Teams windows are actual meetings (not pop-out chats)
+                if appName == "Microsoft Teams" && !meetingVerifier(pid) {
+                    consecutiveHits[appName] = 0
+                    continue
+                }
+
                 return DetectedMeeting(
                     pattern: pattern,
                     windowTitle: match.title,
@@ -175,6 +187,46 @@ class MeetingDetector {
             }
         }
 
+        return nil
+    }
+
+    // MARK: - Meeting Verification
+
+    /// Known "Leave" button labels across locales (lowercase).
+    private static let leaveLabels = ["leave", "verlassen", "leave call", "hang up"]
+
+    /// Verify that a Teams window is actually a meeting (not a pop-out chat).
+    /// Checks for a "Leave" button which only exists in meeting windows.
+    static func verifyTeamsMeeting(pid: pid_t) -> Bool {
+        guard AXIsProcessTrusted() else { return true } // can't verify, assume meeting
+        let app = AXUIElementCreateApplication(pid)
+        return findLeaveButton(app) != nil
+    }
+
+    /// Search AX tree for a button with a leave/hang-up label.
+    private static func findLeaveButton(_ element: AXUIElement, depth: Int = 0) -> AXUIElement? {
+        if depth > 15 { return nil }
+
+        if let role = AXHelper.getAttribute(element, attribute: kAXRoleAttribute) as? String,
+           role == kAXButtonRole as String {
+            for attr in [kAXDescriptionAttribute, kAXTitleAttribute] as [String] {
+                if let text = AXHelper.getAttribute(element, attribute: attr) as? String {
+                    let lower = text.lowercased()
+                    if leaveLabels.contains(where: { lower.hasPrefix($0) }) {
+                        return element
+                    }
+                }
+            }
+        }
+
+        guard let children = AXHelper.getAttribute(element, attribute: kAXChildrenAttribute) as? [AXUIElement] else {
+            return nil
+        }
+        for child in children {
+            if let found = findLeaveButton(child, depth: depth + 1) {
+                return found
+            }
+        }
         return nil
     }
 

@@ -19,6 +19,16 @@ private func makeWindow(
     ]
 }
 
+/// Create a MeetingDetector with AX meeting verification bypassed (for unit tests).
+private func makeDetector(
+    patterns: [AppMeetingPattern],
+    confirmationCount: Int = 1
+) -> MeetingDetector {
+    let detector = MeetingDetector(patterns: patterns, confirmationCount: confirmationCount)
+    detector.meetingVerifier = { _ in true }
+    return detector
+}
+
 // MARK: - Pattern Tests
 
 final class MeetingPatternsTests: XCTestCase {
@@ -54,13 +64,13 @@ final class MeetingPatternsTests: XCTestCase {
 
 final class MeetingDetectorTests: XCTestCase {
     func testNoWindowsReturnsNil() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         detector.windowListProvider = { [] }
         XCTAssertNil(detector.checkOnce())
     }
 
     func testDetectsTeamsMeetingAfterConfirmation() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 2)
+        let detector = makeDetector(patterns: [.teams], confirmationCount: 2)
         let windows = [
             makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams"),
         ]
@@ -76,7 +86,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testDetectsTeamsMeetingWithConfirmation1() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         let windows = [
             makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams"),
         ]
@@ -88,7 +98,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testIgnoresIdleTeamsWindow() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         detector.windowListProvider = {
             [makeWindow(owner: "Microsoft Teams", name: "Microsoft Teams")]
         }
@@ -96,7 +106,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testIgnoresChatWindow() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         detector.windowListProvider = {
             [makeWindow(owner: "Microsoft Teams", name: "Chat | John Doe")]
         }
@@ -104,7 +114,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testDetectsEchoTestCall() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         detector.windowListProvider = {
             [makeWindow(
                 owner: "Microsoft Teams",
@@ -116,7 +126,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testIgnoresSmallWindows() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         detector.windowListProvider = {
             [makeWindow(
                 owner: "Microsoft Teams",
@@ -128,7 +138,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testIgnoresEmptyTitle() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         detector.windowListProvider = {
             [makeWindow(owner: "Microsoft Teams", name: "")]
         }
@@ -136,7 +146,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testIgnoresWrongOwner() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         detector.windowListProvider = {
             [makeWindow(owner: "Firefox", name: "Sprint Review | Microsoft Teams")]
         }
@@ -144,7 +154,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testResetsCounterWhenWindowDisappears() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 3)
+        let detector = makeDetector(patterns: [.teams], confirmationCount: 3)
         let meetingWindows = [
             makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams"),
         ]
@@ -165,7 +175,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testDetectsZoomMeeting() {
-        let detector = MeetingDetector(patterns: [.zoom], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.zoom])
         detector.windowListProvider = {
             [makeWindow(owner: "zoom.us", name: "Zoom Meeting")]
         }
@@ -175,7 +185,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testDetectsZoomNamedMeeting() {
-        let detector = MeetingDetector(patterns: [.zoom], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.zoom])
         detector.windowListProvider = {
             [makeWindow(owner: "zoom.us", name: "Sprint Planning - Zoom")]
         }
@@ -183,7 +193,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testIgnoresZoomIdle() {
-        let detector = MeetingDetector(patterns: [.zoom], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.zoom])
         detector.windowListProvider = {
             [makeWindow(owner: "zoom.us", name: "Zoom Workplace")]
         }
@@ -191,7 +201,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testDetectsWebexMeeting() {
-        let detector = MeetingDetector(patterns: [.webex], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.webex])
         detector.windowListProvider = {
             [makeWindow(owner: "Webex", name: "Team Sync - Webex")]
         }
@@ -201,7 +211,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testMultiplePatterns() {
-        let detector = MeetingDetector(patterns: [.teams, .zoom], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams, .zoom])
         detector.windowListProvider = {
             [
                 makeWindow(owner: "Microsoft Teams", name: "Microsoft Teams"),  // idle
@@ -214,7 +224,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testIsMeetingActiveTrue() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         let windows = [
             makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams"),
         ]
@@ -225,7 +235,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testIsMeetingActiveFalse() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         let windows = [
             makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams"),
         ]
@@ -240,7 +250,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testResetClearsCounters() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 2)
+        let detector = makeDetector(patterns: [.teams], confirmationCount: 2)
         let windows = [
             makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams"),
         ]
@@ -260,7 +270,7 @@ final class MeetingDetectorTests: XCTestCase {
             meetingPatterns: [#"^Meeting:.*"#],
             idlePatterns: [#"^Custom App$"#]
         )
-        let detector = MeetingDetector(patterns: [custom], confirmationCount: 1)
+        let detector = makeDetector(patterns: [custom])
         detector.windowListProvider = {
             [makeWindow(owner: "CustomApp", name: "Meeting: Sprint")]
         }
@@ -270,7 +280,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testTeamsWorkOrSchool() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         detector.windowListProvider = {
             [makeWindow(
                 owner: "Microsoft Teams (work or school)",
@@ -283,7 +293,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testWebexPersonalRoom() {
-        let detector = MeetingDetector(patterns: [.webex], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.webex])
         detector.windowListProvider = {
             [makeWindow(owner: "Webex", name: "John's Personal Room")]
         }
@@ -291,7 +301,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testZoomWebinar() {
-        let detector = MeetingDetector(patterns: [.zoom], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.zoom])
         detector.windowListProvider = {
             [makeWindow(owner: "zoom.us", name: "Zoom Webinar")]
         }
@@ -301,7 +311,7 @@ final class MeetingDetectorTests: XCTestCase {
     // MARK: - Cooldown
 
     func testCooldownPreventsRedetection() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         let windows = [
             makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams"),
         ]
@@ -319,7 +329,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testCooldownDoesNotAffectOtherApps() {
-        let detector = MeetingDetector(patterns: [.teams, .zoom], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams, .zoom])
 
         // First detect Teams
         detector.windowListProvider = {
@@ -343,7 +353,7 @@ final class MeetingDetectorTests: XCTestCase {
 
     func testDuplicateWindowsSameAppCountOnce() {
         // Two matching windows from same app should only count as one hit (line 79)
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 2)
+        let detector = makeDetector(patterns: [.teams], confirmationCount: 2)
         detector.windowListProvider = {
             [
                 makeWindow(owner: "Microsoft Teams", name: "Meeting A | Microsoft Teams"),
@@ -359,7 +369,7 @@ final class MeetingDetectorTests: XCTestCase {
 
     func testWindowWithoutBoundsPassesSizeCheck() {
         // Window dict missing kCGWindowBounds — size check skipped (lines 146-148)
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         let window: [String: Any] = [
             "kCGWindowOwnerName": "Microsoft Teams",
             "kCGWindowName": "Sprint Review | Microsoft Teams",
@@ -372,7 +382,7 @@ final class MeetingDetectorTests: XCTestCase {
 
     func testTitleNotMatchingAnyMeetingPattern() {
         // Title passes owner + idle checks but doesn't match meeting regex (lines 170-171)
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         detector.windowListProvider = {
             [makeWindow(owner: "Microsoft Teams", name: "Some Random Title")]
         }
@@ -380,7 +390,7 @@ final class MeetingDetectorTests: XCTestCase {
     }
 
     func testResetWithoutAppNameNoCooldown() {
-        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let detector = makeDetector(patterns: [.teams])
         let windows = [
             makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams"),
         ]

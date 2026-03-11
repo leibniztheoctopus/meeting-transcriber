@@ -114,6 +114,10 @@ struct ProtocolGenerator {
         // Remove CLAUDECODE env var to allow nested Claude CLI invocation
         var env = ProcessInfo.processInfo.environment
         env.removeValue(forKey: "CLAUDECODE")
+        // App bundles have a minimal PATH — ensure common bin dirs are included
+        // so wrapper scripts (e.g. claude-work-wrapper calling `exec claude`) work
+        let extraPaths = Self.searchPaths.joined(separator: ":")
+        env["PATH"] = "\(extraPaths):\(env["PATH"] ?? "/usr/bin:/bin")"
         process.environment = env
 
         let stdinPipe = Pipe()
