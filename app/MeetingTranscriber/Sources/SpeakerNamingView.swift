@@ -98,9 +98,14 @@ struct SpeakerNamingView: View {
                 .font(.headline)
                 .padding(.top, 8)
 
-            ForEach(Array(speakers.enumerated()), id: \.element.label) { index, speaker in
-                speakerRow(index: index, speaker: speaker)
+            ScrollView {
+                VStack(spacing: 16) {
+                    ForEach(Array(speakers.enumerated()), id: \.element.label) { index, speaker in
+                        speakerRow(index: index, speaker: speaker)
+                    }
+                }
             }
+            .frame(height: min(CGFloat(speakers.count) * 120, 500))
 
             Divider()
 
@@ -142,7 +147,7 @@ struct SpeakerNamingView: View {
             .padding(.bottom, 8)
         }
         .padding()
-        .frame(minWidth: 400)
+        .frame(minWidth: 400, maxHeight: 700)
         .id(data.meetingTitle)
         .onAppear {
             names = speakers.map { $0.autoName ?? "" }
