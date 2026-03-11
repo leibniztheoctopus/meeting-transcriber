@@ -49,7 +49,7 @@ class MeetingDetector {
     var windowListProvider: () -> [[String: Any]] = MeetingDetector.systemWindowList
 
     /// Closure to verify a Teams window is a real meeting (not a pop-out chat).
-    /// Override in tests to skip AX verification. Default checks for "Leave" button.
+    /// Searches the AXWebArea DOM for the hangup button. Override in tests.
     var meetingVerifier: ((_ pid: pid_t) -> Bool) = MeetingDetector.verifyTeamsMeeting
 
     init(patterns: [AppMeetingPattern], confirmationCount: Int = 2) {
@@ -195,51 +195,38 @@ class MeetingDetector {
 
     // MARK: - Meeting Verification
 
-    /// Known "Leave" button labels across locales (lowercase).
-    private static let leaveLabels = [
-        "leave", "verlassen", "leave call", "hang up", "hangup",
-        "quitter", "salir", "uscire",  // FR, ES, IT
+    /// DOM identifiers that indicate an active Teams call/meeting.
+    /// These are stable Electron DOM IDs used by Teams' web content.
+    private static let meetingDOMIdentifiers: Set<String> = [
+        "hangup-button",
+        "microphone-button",
+        "video-button",
     ]
 
-    /// Known AX identifiers for the leave/hangup button.
-    private static let leaveIdentifiers = [
-        "leave-call", "hangup", "leave", "hang-up", "hangup-btn",
-        "leave-call-btn", "leave-meeting",
-    ]
-
-    /// Verify that a Teams window is actually a meeting (not a pop-out chat).
-    /// Checks for a "Leave" button which only exists in meeting windows.
+    /// Verify that a Teams window is an active meeting by searching the AXWebArea
+    /// DOM for call-control buttons (hangup, microphone, video).
+    ///
+    /// Teams is an Electron app — standard AXButton roles on window chrome don't
+    /// expose meeting controls. The web content inside AXWebArea does expose them
+    /// via `AXDOMIdentifier`.
     static func verifyTeamsMeeting(pid: pid_t) -> Bool {
         guard AXIsProcessTrusted() else { return true } // can't verify, assume meeting
         let app = AXUIElementCreateApplication(pid)
-        let found = findLeaveButton(app) != nil
+        let found = findMeetingControl(app) != nil
         if !found {
-            logger.info("Teams AX verification: no Leave button found for PID \(pid) — skipping as chat")
+            logger.info("Teams AX verification: no call controls found for PID \(pid) — skipping as chat")
         }
         return found
     }
 
-    /// Search AX tree for a button with a leave/hang-up label or identifier.
-    private static func findLeaveButton(_ element: AXUIElement, depth: Int = 0) -> AXUIElement? {
-        if depth > 20 { return nil }
+    /// Search AX tree for an element with a meeting-related AXDOMIdentifier.
+    private static func findMeetingControl(_ element: AXUIElement, depth: Int = 0) -> AXUIElement? {
+        if depth > 30 { return nil }
 
-        if let role = AXHelper.getAttribute(element, attribute: kAXRoleAttribute) as? String,
-           role == kAXButtonRole as String {
-            // Check AXIdentifier
-            if let id = AXHelper.getAttribute(element, attribute: "AXIdentifier") as? String {
-                let lower = id.lowercased()
-                if leaveIdentifiers.contains(where: { lower.contains($0) }) {
-                    return element
-                }
-            }
-            // Check AXDescription and AXTitle
-            for attr in [kAXDescriptionAttribute, kAXTitleAttribute] as [String] {
-                if let text = AXHelper.getAttribute(element, attribute: attr) as? String {
-                    let lower = text.lowercased()
-                    if leaveLabels.contains(where: { lower.hasPrefix($0) }) {
-                        return element
-                    }
-                }
+        // Check AXDOMIdentifier (set on Electron/WebView elements)
+        if let domId = AXHelper.getAttribute(element, attribute: "AXDOMIdentifier") as? String {
+            if meetingDOMIdentifiers.contains(domId) {
+                return element
             }
         }
 
@@ -247,7 +234,7 @@ class MeetingDetector {
             return nil
         }
         for child in children {
-            if let found = findLeaveButton(child, depth: depth + 1) {
+            if let found = findMeetingControl(child, depth: depth + 1) {
                 return found
             }
         }
