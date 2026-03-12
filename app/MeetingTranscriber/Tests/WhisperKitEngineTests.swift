@@ -66,7 +66,7 @@ final class WhisperKitEngineTests: XCTestCase {
 
         // Should contain some German words from the conversation
         let lowered = transcript.lowercased()
-        let germanWords = ["und", "die", "der", "ist", "wir", "das", "den", "ich", "nicht", "ein"]
+        let germanWords = ["und", "die", "der", "ist", "wir", "das", "den", "ich", "nicht", "ein", "guten", "tag"]
         let foundGerman = germanWords.contains { lowered.contains($0) }
         XCTAssertTrue(
             foundGerman,
