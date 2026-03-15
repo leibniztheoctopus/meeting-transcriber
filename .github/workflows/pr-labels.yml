@@ -17,11 +17,11 @@ jobs:
             const title = context.payload.pull_request.title;
             const labels = [];
 
-            if (/^feat(\(|:|!)/.test(title)) labels.push('enhancement');
-            else if (/^fix(\(|:|!)/.test(title)) labels.push('bug');
-            else if (/^docs(\(|:|!)/.test(title)) labels.push('documentation');
-            else if (/^(ci|build|chore)(\(|:|!)/.test(title)) labels.push('chore');
-            else if (/^(refactor|perf)(\(|:|!)/.test(title)) labels.push('chore');
+            if (/^feat[\s(:|!]/.test(title)) labels.push('enhancement');
+            else if (/^fix[\s(:|!]/.test(title)) labels.push('bug');
+            else if (/^docs[\s(:|!]/.test(title)) labels.push('documentation');
+            else if (/^(ci|build|chore)[\s(:|!]/.test(title)) labels.push('chore');
+            else if (/^(refactor|perf|test)[\s(:|!]/.test(title)) labels.push('chore');
 
             if (labels.length > 0) {
               await github.rest.issues.addLabels({
