@@ -60,14 +60,14 @@ struct MenuBarView: View {
 
         Divider()
 
-        // Start/Stop Watching
+        // Start/Stop Listening
         Button {
             onStartStop()
         } label: {
             if isWatching {
-                Label("Stop Watching", systemImage: "stop.fill")
+                Label("Stop Listening", systemImage: "stop.fill")
             } else {
-                Label("Start Watching", systemImage: "play.fill")
+                Label("Start Listening", systemImage: "play.fill")
             }
         }
         .keyboardShortcut("s")

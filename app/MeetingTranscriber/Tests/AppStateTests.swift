@@ -103,7 +103,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         state.watchLoop = loop
         loop.start()
         defer { loop.stop() }
-        XCTAssertEqual(state.currentStateLabel, "Watching for Meetings...")
+        XCTAssertEqual(state.currentStateLabel, "Listening...")
     }
 
     func testCurrentStateLabelRecordingWhenManualRecording() async throws {
@@ -158,7 +158,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         state.watchLoop = loop
         loop.start()
         defer { loop.stop() }
-        XCTAssertEqual(state.currentStatus?.detail, "Polling for meetings...")
+        XCTAssertEqual(state.currentStatus?.detail, "Listening for conversations...")
     }
 
     func testCurrentStatusMeetingNilWhenNoActiveMeeting() {

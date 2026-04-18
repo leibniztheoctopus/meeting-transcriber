@@ -93,8 +93,8 @@ class WatchLoop {
         guard watchTask == nil else { return }
 
         transition(to: .watching)
-        detail = "Polling for meetings..."
-        logger.info("Watch mode started (poll: \(self.pollInterval)s, grace: \(self.endGracePeriod)s)")
+        detail = "Listening for conversations..."
+        logger.info("Listen mode started (poll: \(self.pollInterval)s, grace: \(self.endGracePeriod)s)")
 
         watchTask = Task { [weak self] in
             guard let self else { return }
@@ -109,7 +109,7 @@ class WatchLoop {
         cleanupManualRecording()
         transition(to: .idle)
         detail = ""
-        logger.info("Watch mode stopped")
+        logger.info("Listen mode stopped")
     }
 
     // MARK: - Manual Recording
@@ -214,7 +214,7 @@ class WatchLoop {
 
                 if !Task.isCancelled {
                     transition(to: .watching)
-                    detail = "Polling for meetings..."
+                    detail = "Listening for conversations..."
                 }
             }
 
