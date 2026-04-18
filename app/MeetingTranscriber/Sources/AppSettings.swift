@@ -79,8 +79,8 @@ final class AppSettings {
         didSet { defaults.set(watchWebex, forKey: "watchWebex") }
     }
 
-    /// Auto-start watching on app launch.
-    var autoWatch: Bool = defaults.object(forKey: "autoWatch") as? Bool ?? false {
+    /// Auto-start listening on app launch.
+    var autoWatch: Bool = defaults.object(forKey: "autoWatch") as? Bool ?? true {
         didSet { defaults.set(autoWatch, forKey: "autoWatch") }
     }
 

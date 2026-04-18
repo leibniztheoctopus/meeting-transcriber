@@ -32,7 +32,7 @@ enum TranscriberState: String, Codable {
     var label: String {
         switch self {
         case .idle: "Idle"
-        case .watching: "Watching for Meetings..."
+        case .watching: "Listening..."
         case .recording: "Recording"
         case .transcribing: "Transcribing..."
         case .generatingProtocol: "Generating Protocol..."
