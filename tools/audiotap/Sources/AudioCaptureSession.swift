@@ -7,7 +7,13 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// Replaces the CLI entry point — call `start()` and `stop()` directly from the host app.
 @available(macOS 14.2, *)
 public class AudioCaptureSession {
-    private let pid: pid_t
+    public enum CaptureMode {
+        case process(pid_t)
+        case global
+        case defaultOutput
+    }
+
+    private let mode: CaptureMode
     private let sampleRate: Int
     private let channels: Int
     private let appOutputURL: URL
@@ -19,14 +25,14 @@ public class AudioCaptureSession {
     private var appFileHandle: FileHandle?
 
     public init(
-        pid: pid_t,
+        mode: CaptureMode,
         appOutputURL: URL,
         sampleRate: Int = 48000,
         channels: Int = 2,
         micOutputURL: URL? = nil,
         micDeviceUID: String? = nil,
     ) {
-        self.pid = pid
+        self.mode = mode
         self.sampleRate = sampleRate
         self.channels = channels
         self.appOutputURL = appOutputURL
@@ -45,8 +51,18 @@ public class AudioCaptureSession {
         )
         let handle = try FileHandle(forWritingTo: appOutputURL)
 
+        let target: AppAudioCapture.CaptureTarget
+        switch mode {
+        case let .process(pid):
+            target = .process(pid)
+        case .global:
+            target = .global
+        case .defaultOutput:
+            target = .defaultOutput
+        }
+
         let capture = AppAudioCapture(
-            pid: pid,
+            target: target,
             outputFileDescriptor: handle.fileDescriptor,
             sampleRate: sampleRate,
             channels: channels,
@@ -71,7 +87,7 @@ public class AudioCaptureSession {
             }
         }
 
-        logger.info("Capture session started (PID \(self.pid), rate: \(self.sampleRate), channels: \(self.channels))")
+        logger.info("Capture session started (mode: \(self.modeDescription), rate: \(self.sampleRate), channels: \(self.channels))")
     }
 
     /// Stop all capture and return the result.
@@ -109,5 +125,16 @@ public class AudioCaptureSession {
 
         logger.info("Capture session stopped (rate: \(result.actualSampleRate), channels: \(result.actualChannels), micDelay: \(result.micDelay))")
         return result
+    }
+
+    private var modeDescription: String {
+        switch mode {
+        case let .process(pid):
+            return "process \(pid)"
+        case .global:
+            return "global"
+        case .defaultOutput:
+            return "default-output"
+        }
     }
 }

@@ -37,6 +37,13 @@ struct MeetingTranscriberApp: App {
                 updateChecker: appState.updateChecker,
                 onStartStop: appState.toggleWatching,
                 onRecordApp: { bringWindowToFront(id: "record-app") },
+                onPauseResumeListening: appState.watchLoop?.mode == .continuous ? {
+                    if appState.watchLoop?.state == .paused {
+                        appState.resumeListening()
+                    } else {
+                        appState.pauseListening()
+                    }
+                } : nil,
                 onStopManualRecording: appState.watchLoop?.isManualRecording == true ? {
                     appState.stopManualRecording()
                 } : nil,

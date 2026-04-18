@@ -31,6 +31,7 @@ struct PipelineJob: Identifiable, Codable {
     let micPath: URL?
     let micDelay: TimeInterval
     let participants: [String]
+    let isContinuousCapture: Bool
     let enqueuedAt: Date
     var state: JobState
     var error: String?
@@ -46,6 +47,7 @@ struct PipelineJob: Identifiable, Codable {
         micPath: URL?,
         micDelay: TimeInterval,
         participants: [String] = [],
+        isContinuousCapture: Bool = false,
     ) {
         self.id = UUID()
         self.meetingTitle = meetingTitle
@@ -55,6 +57,7 @@ struct PipelineJob: Identifiable, Codable {
         self.micPath = micPath
         self.micDelay = micDelay
         self.participants = participants
+        self.isContinuousCapture = isContinuousCapture
         self.enqueuedAt = Date()
         self.state = .waiting
         self.error = nil

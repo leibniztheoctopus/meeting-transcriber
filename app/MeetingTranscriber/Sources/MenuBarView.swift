@@ -7,6 +7,7 @@ struct MenuBarView: View {
     var updateChecker: UpdateChecker?
     let onStartStop: () -> Void
     let onRecordApp: () -> Void
+    let onPauseResumeListening: (() -> Void)?
     let onStopManualRecording: (() -> Void)?
     let onOpenLastProtocol: () -> Void
     let onOpenProtocol: (URL) -> Void
@@ -72,6 +73,19 @@ struct MenuBarView: View {
         }
         .keyboardShortcut("s")
 
+        if let onPauseResumeListening {
+            Button {
+                onPauseResumeListening()
+            } label: {
+                if state == .paused {
+                    Label("Resume Listening", systemImage: "play.circle.fill")
+                } else {
+                    Label("Pause Listening", systemImage: "pause.circle.fill")
+                }
+            }
+            .keyboardShortcut("p")
+        }
+
         if let onStopManualRecording {
             Button {
                 onStopManualRecording()
@@ -102,7 +116,7 @@ struct MenuBarView: View {
         } label: {
             Label("Process Audio/Video Files...", systemImage: "doc.badge.plus")
         }
-        .keyboardShortcut("p")
+        .keyboardShortcut("f")
 
         // Processing queue
         if !pipelineQueue.jobs.isEmpty {

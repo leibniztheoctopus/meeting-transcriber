@@ -21,6 +21,7 @@ enum TranscriberState: String, Codable {
     case idle
     case watching
     case recording
+    case paused
     case transcribing
     case generatingProtocol = "generating_protocol"
     case waitingForSpeakerCount = "waiting_for_speaker_count"
@@ -34,6 +35,7 @@ enum TranscriberState: String, Codable {
         case .idle: "Idle"
         case .watching: "Listening..."
         case .recording: "Recording"
+        case .paused: "Paused"
         case .transcribing: "Transcribing..."
         case .generatingProtocol: "Generating Protocol..."
         case .waitingForSpeakerCount: "Speaker Count"
@@ -49,6 +51,7 @@ enum TranscriberState: String, Codable {
         case .idle: "waveform.circle"
         case .watching: "eye.fill"
         case .recording: "record.circle.fill"
+        case .paused: "pause.circle.fill"
         case .transcribing: "waveform"
         case .generatingProtocol: "waveform"
         case .waitingForSpeakerCount: "person.2.wave.2"

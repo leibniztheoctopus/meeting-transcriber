@@ -9,7 +9,13 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// Monitors default output device changes and recreates the tap when needed.
 @available(macOS 14.2, *)
 public class AppAudioCapture {
-    private let pid: pid_t
+    public enum CaptureTarget {
+        case process(pid_t)
+        case global
+        case defaultOutput
+    }
+
+    private let target: CaptureTarget
     private let sampleRate: Int
     private let channels: Int
     private let outputFileDescriptor: Int32
@@ -42,19 +48,19 @@ public class AppAudioCapture {
     private var isRestarting = false
 
     /// - Parameters:
-    ///   - pid: Process ID of the app to capture audio from.
+    ///   - target: Capture target, either a process, global mix, or default output.
     ///   - outputFileDescriptor: File descriptor to write raw PCM data to.
     ///   - sampleRate: Desired sample rate (default 48000).
     ///   - channels: Number of audio channels (default 2).
-    public init(pid: pid_t, outputFileDescriptor: Int32, sampleRate: Int = 48000, channels: Int = 2) {
-        self.pid = pid
+    public init(target: CaptureTarget, outputFileDescriptor: Int32, sampleRate: Int = 48000, channels: Int = 2) {
+        self.target = target
         self.outputFileDescriptor = outputFileDescriptor
         self.sampleRate = sampleRate
         self.channels = channels
     }
 
     /// Translate PID to CoreAudio process AudioObjectID.
-    private func translatePID() throws -> AudioObjectID {
+    private static func translatePID(_ pid: pid_t) throws -> AudioObjectID {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -213,9 +219,6 @@ public class AppAudioCapture {
 
     // swiftlint:disable:next function_body_length
     private func startCapture() throws {
-        let processObjectID = try translatePID()
-        logger.info("Process audio object ID: \(processObjectID)")
-
         // Get default output device UID
         guard let systemOutputUID = getDefaultOutputDeviceUID() else {
             throw NSError(
@@ -225,8 +228,19 @@ public class AppAudioCapture {
         }
         logger.info("System output device: \(systemOutputUID)")
 
-        // Create CATapDescription for the target process
-        let tap = CATapDescription(stereoMixdownOfProcesses: [processObjectID])
+        let tap: CATapDescription
+        switch target {
+        case let .process(pid):
+            let processObjectID = try Self.translatePID(pid)
+            logger.info("Process audio object ID: \(processObjectID)")
+            tap = CATapDescription(stereoMixdownOfProcesses: [processObjectID])
+
+        case .global:
+            tap = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
+
+        case .defaultOutput:
+            tap = CATapDescription(__processes: [], andDeviceUID: systemOutputUID, withStream: 0)
+        }
         tap.uuid = UUID()
         tap.name = "MeetingTranscriber-tap"
         tap.isPrivate = true
@@ -248,7 +262,7 @@ public class AppAudioCapture {
 
         // Create aggregate device with the tap
         let desc: [String: Any] = [
-            kAudioAggregateDeviceNameKey as String: "audiotap-\(pid)",
+            kAudioAggregateDeviceNameKey as String: "audiotap-\(targetDescription)",
             kAudioAggregateDeviceUIDKey as String: UUID().uuidString,
             kAudioAggregateDeviceMainSubDeviceKey as String: systemOutputUID,
             kAudioAggregateDeviceIsPrivateKey as String: true,
@@ -354,7 +368,7 @@ public class AppAudioCapture {
         actualSampleRate = Self.resolveActualSampleRate(
             deviceID: aggregateID, tapID: tapID, requestedRate: sampleRate,
         )
-        logger.info("Audio capture started (PID \(self.pid), rate: \(self.actualSampleRate) Hz)")
+        logger.info("Audio capture started (target: \(self.targetDescription), rate: \(self.actualSampleRate) Hz)")
     }
 
     private func installOutputDeviceChangeListener() {
@@ -448,5 +462,16 @@ public class AppAudioCapture {
             outputListenerInstalled = false
         }
         logger.info("Audio capture stopped")
+    }
+
+    private var targetDescription: String {
+        switch target {
+        case let .process(pid):
+            return "process \(pid)"
+        case .global:
+            return "global"
+        case .defaultOutput:
+            return "default-output"
+        }
     }
 }

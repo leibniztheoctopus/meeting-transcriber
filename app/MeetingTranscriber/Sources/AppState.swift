@@ -167,6 +167,8 @@ final class AppState {
                     endGracePeriod: settings.endGrace,
                     noMic: settings.noMic,
                     micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
+                    mode: settings.alwaysListening ? .continuous : .meetingTriggered,
+                    continuousChunkDuration: settings.listeningChunkDuration,
                 )
 
                 loop.onStateChange = { [weak loop, notifier] _, newState in
@@ -176,6 +178,11 @@ final class AppState {
                             notifier.notify(
                                 title: "Meeting Detected",
                                 body: "Recording: \(meeting.windowTitle)",
+                            )
+                        } else if loop?.mode == .continuous {
+                            notifier.notify(
+                                title: "Continuous Listening",
+                                body: "Recording a new listening chunk",
                             )
                         }
 
@@ -243,6 +250,14 @@ final class AppState {
     func stopManualRecording() {
         watchLoop?.stopManualRecording()
         watchLoop = nil
+    }
+
+    func pauseListening() {
+        watchLoop?.pause()
+    }
+
+    func resumeListening() {
+        watchLoop?.resume()
     }
 
     func enqueueFiles(_ urls: [URL]) {

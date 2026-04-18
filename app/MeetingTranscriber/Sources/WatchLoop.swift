@@ -16,10 +16,16 @@ struct ManualRecordingInfo {
 @MainActor
 @Observable
 class WatchLoop {
+    enum Mode {
+        case meetingTriggered
+        case continuous
+    }
+
     enum State: String {
         case idle
         case watching
         case recording
+        case paused
         case error
     }
 
@@ -27,11 +33,13 @@ class WatchLoop {
     private(set) var currentMeeting: DetectedMeeting?
     private(set) var lastError: String?
     private(set) var detail: String = ""
+    private(set) var mode: Mode
 
     // Manual recording
     private(set) var manualRecordingInfo: ManualRecordingInfo?
     private var activeRecorder: RecordingProvider?
     private var manualRecordingTask: Task<Void, Never>?
+    private var continuousTask: Task<Void, Never>?
 
     var isManualRecording: Bool {
         manualRecordingInfo != nil
@@ -49,6 +57,7 @@ class WatchLoop {
     let maxDuration: TimeInterval
     let noMic: Bool
     let micDeviceUID: String?
+    let continuousChunkDuration: TimeInterval
 
     private var watchTask: Task<Void, Never>?
 
@@ -64,6 +73,8 @@ class WatchLoop {
         maxDuration: TimeInterval = 14400,
         noMic: Bool = false,
         micDeviceUID: String? = nil,
+        mode: Mode = .meetingTriggered,
+        continuousChunkDuration: TimeInterval = 300,
     ) {
         self.detector = detector
         self.recorderFactory = recorderFactory
@@ -73,6 +84,8 @@ class WatchLoop {
         self.maxDuration = maxDuration
         self.noMic = noMic
         self.micDeviceUID = micDeviceUID
+        self.mode = mode
+        self.continuousChunkDuration = continuousChunkDuration
     }
 
     nonisolated static var defaultOutputDir: URL {
@@ -90,26 +103,56 @@ class WatchLoop {
     // MARK: - Start / Stop
 
     func start() {
-        guard watchTask == nil else { return }
+        guard watchTask == nil, continuousTask == nil else { return }
 
         transition(to: .watching)
-        detail = "Listening for conversations..."
-        logger.info("Listen mode started (poll: \(self.pollInterval)s, grace: \(self.endGracePeriod)s)")
+        detail = mode == .continuous ? "Listening continuously..." : "Listening for conversations..."
+        logger.info("Listen mode started (mode: \(self.mode == .continuous ? "continuous" : "meeting"), poll: \(self.pollInterval)s, grace: \(self.endGracePeriod)s)")
 
-        watchTask = Task { [weak self] in
-            guard let self else { return }
-            await self.watchLoop()
+        if mode == .continuous {
+            continuousTask = Task { [weak self] in
+                guard let self else { return }
+                await self.continuousLoop()
+            }
+        } else {
+            watchTask = Task { [weak self] in
+                guard let self else { return }
+                await self.watchLoop()
+            }
         }
     }
 
     func stop() {
         watchTask?.cancel()
         watchTask = nil
+        continuousTask?.cancel()
+        continuousTask = nil
         currentMeeting = nil
         cleanupManualRecording()
         transition(to: .idle)
         detail = ""
         logger.info("Listen mode stopped")
+    }
+
+    func pause() {
+        guard mode == .continuous, state != .paused else { return }
+        continuousTask?.cancel()
+        continuousTask = nil
+        activeRecorder = nil
+        transition(to: .paused)
+        detail = "Listening paused"
+        logger.info("Continuous listening paused")
+    }
+
+    func resume() {
+        guard mode == .continuous, state == .paused, continuousTask == nil else { return }
+        transition(to: .watching)
+        detail = "Listening continuously..."
+        continuousTask = Task { [weak self] in
+            guard let self else { return }
+            await self.continuousLoop()
+        }
+        logger.info("Continuous listening resumed")
     }
 
     // MARK: - Manual Recording
@@ -191,6 +234,64 @@ class WatchLoop {
         manualRecordingTask = nil
         activeRecorder = nil
         manualRecordingInfo = nil
+    }
+
+    // MARK: - Continuous Listening
+
+    private func continuousLoop() async {
+        while !Task.isCancelled {
+            do {
+                try await runContinuousChunk()
+            } catch {
+                if error is CancellationError { return }
+                let msg = "Continuous capture error: \(error)"
+                logger.error("\(msg)")
+                lastError = error.localizedDescription
+                transition(to: .error)
+                detail = msg
+                try? await Task.sleep(for: .seconds(5))
+                if !Task.isCancelled {
+                    transition(to: .watching)
+                    detail = "Listening continuously..."
+                }
+            }
+        }
+    }
+
+    private func runContinuousChunk() async throws {
+        let recorder = recorderFactory()
+        let title = Self.continuousChunkTitle()
+
+        currentMeeting = nil
+        transition(to: .recording)
+        detail = "Recording: \(title)"
+
+        try recorder.startSystemAudio(
+            noMic: noMic,
+            micDeviceUID: micDeviceUID,
+        )
+
+        let startedAt = Date()
+        while !Task.isCancelled {
+            if Date().timeIntervalSince(startedAt) >= continuousChunkDuration {
+                break
+            }
+            try await Task.sleep(for: .seconds(min(pollInterval, 1.0)))
+        }
+
+        let recording = try recorder.stop()
+        enqueueRecording(
+            title: title,
+            appName: "Continuous Listening",
+            recording: recording,
+            participants: [],
+            isContinuousCapture: true,
+        )
+
+        if !Task.isCancelled {
+            transition(to: .watching)
+            detail = "Listening continuously..."
+        }
     }
 
     // MARK: - Watch Loop
@@ -301,6 +402,7 @@ class WatchLoop {
         appName: String,
         recording: RecordingResult,
         participants: [String] = [],
+        isContinuousCapture: Bool = false,
     ) {
         let job = PipelineJob(
             meetingTitle: title,
@@ -310,6 +412,7 @@ class WatchLoop {
             micPath: recording.micPath,
             micDelay: recording.micDelay,
             participants: participants,
+            isContinuousCapture: isContinuousCapture,
         )
         pipelineQueue?.enqueue(job)
         logger.info("Enqueued pipeline job for: \(title)")
@@ -332,12 +435,19 @@ class WatchLoop {
         return title
     }
 
+    private static func continuousChunkTitle(now: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return "Continuous Capture \(formatter.string(from: now))"
+    }
+
     /// Map WatchLoop state to TranscriberState for compatibility with existing UI.
     var transcriberState: TranscriberState {
         switch state {
         case .idle: .idle
         case .watching: .watching
         case .recording: .recording
+        case .paused: .paused
         case .error: .error
         }
     }

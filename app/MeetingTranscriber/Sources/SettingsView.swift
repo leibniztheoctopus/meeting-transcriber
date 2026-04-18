@@ -96,6 +96,25 @@ struct SettingsView: View {
 
             // swiftlint:disable:next closure_body_length
             Section("Recording") {
+                Toggle("Always Listening", isOn: $settings.alwaysListening)
+                Text("When enabled, the app records rolling listening chunks instead of waiting for a meeting trigger.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if settings.alwaysListening {
+                    HStack {
+                        Text("Chunk Length")
+                        Spacer()
+                        TextField("", value: $settings.listeningChunkDuration, format: .number)
+                            .frame(width: 60)
+                            .multilineTextAlignment(.trailing)
+                        Stepper("", value: $settings.listeningChunkDuration, in: 30 ... 3600, step: 30)
+                            .labelsHidden()
+                        Text("seconds")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 HStack {
                     Text("Poll Interval")
                     Spacer()

@@ -18,6 +18,7 @@ struct RecordingResult {
 @MainActor
 protocol RecordingProvider {
     func start(appPID: pid_t, noMic: Bool, micDeviceUID: String?) throws
+    func startSystemAudio(noMic: Bool, micDeviceUID: String?) throws
     func stop() throws -> RecordingResult
 }
 
@@ -82,7 +83,7 @@ class DualSourceRecorder: RecordingProvider {
         let micURL: URL? = noMic ? nil : recDir.appendingPathComponent("\(ts)_mic.wav")
 
         let session = AudioCaptureSession(
-            pid: appPID,
+            mode: .process(appPID),
             appOutputURL: appTempURL,
             sampleRate: recordRate,
             channels: appChannels,
@@ -96,6 +97,41 @@ class DualSourceRecorder: RecordingProvider {
         recordingStartTime = ProcessInfo.processInfo.systemUptime
 
         logger.info("Recording started: PID \(appPID), \(self.recordRate) Hz, \(self.appChannels)ch")
+    }
+
+    func startSystemAudio(
+        noMic: Bool = false,
+        micDeviceUID: String? = nil,
+    ) throws {
+        guard !isRecording else { return }
+        guard #available(macOS 14.2, *) else {
+            throw RecorderError.unsupportedOS
+        }
+
+        let recDir = Self.recordingsDir
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+
+        let ts = Self.timestamp()
+        startTimestamp = ts
+
+        let appTempURL = recDir.appendingPathComponent("\(ts)_app_raw.tmp")
+        let micURL: URL? = noMic ? nil : recDir.appendingPathComponent("\(ts)_mic.wav")
+
+        let session = AudioCaptureSession(
+            mode: .global,
+            appOutputURL: appTempURL,
+            sampleRate: recordRate,
+            channels: appChannels,
+            micOutputURL: micURL,
+            micDeviceUID: (micDeviceUID?.isEmpty ?? true) ? nil : micDeviceUID,
+        )
+        try session.start()
+        captureSession = session
+
+        isRecording = true
+        recordingStartTime = ProcessInfo.processInfo.systemUptime
+
+        logger.info("System-audio recording started, \(self.recordRate) Hz, \(self.appChannels)ch")
     }
 
     /// Stop recording and produce a mixed WAV.

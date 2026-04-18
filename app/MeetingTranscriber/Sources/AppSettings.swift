@@ -84,6 +84,19 @@ final class AppSettings {
         didSet { defaults.set(autoWatch, forKey: "autoWatch") }
     }
 
+    /// Enable true always-listening capture instead of meeting-triggered capture.
+    var alwaysListening: Bool = defaults.object(forKey: "alwaysListening") as? Bool ?? true {
+        didSet { defaults.set(alwaysListening, forKey: "alwaysListening") }
+    }
+
+    /// Chunk length for continuous listening sessions.
+    var listeningChunkDuration: Double = defaults.object(forKey: "listeningChunkDuration") as? Double ?? 300 {
+        didSet {
+            if listeningChunkDuration < 30 { listeningChunkDuration = 30 }
+            defaults.set(listeningChunkDuration, forKey: "listeningChunkDuration")
+        }
+    }
+
     // MARK: - Recording
 
     var pollInterval: Double = defaults.object(forKey: "pollInterval") as? Double ?? 3.0 {
