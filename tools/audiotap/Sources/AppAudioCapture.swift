@@ -431,25 +431,41 @@ public class AppAudioCapture {
     }
 
     private func stopCapture() {
+        logger.info("stopCapture begin: target=\(self.targetDescription), aggregate=\(self.aggregateID), tap=\(self.tapID), proc=\(self.procID != nil)")
         isRunning = false
 
         if let procID {
-            AudioDeviceStop(aggregateID, procID)
-            AudioDeviceDestroyIOProcID(aggregateID, procID)
+            let stopStatus = AudioDeviceStop(aggregateID, procID)
+            if stopStatus != noErr {
+                logger.warning("AudioDeviceStop failed: \(stopStatus)")
+            }
+            let destroyProcStatus = AudioDeviceDestroyIOProcID(aggregateID, procID)
+            if destroyProcStatus != noErr {
+                logger.warning("AudioDeviceDestroyIOProcID failed: \(destroyProcStatus)")
+            }
             self.procID = nil
         }
         if aggregateID != kAudioObjectUnknown {
-            AudioHardwareDestroyAggregateDevice(aggregateID)
+            let destroyAggregateStatus = AudioHardwareDestroyAggregateDevice(aggregateID)
+            if destroyAggregateStatus != noErr {
+                logger.warning("AudioHardwareDestroyAggregateDevice failed: \(destroyAggregateStatus)")
+            }
             aggregateID = AudioObjectID(kAudioObjectUnknown)
         }
         if tapID != kAudioObjectUnknown {
-            AudioHardwareDestroyProcessTap(tapID)
+            let destroyTapStatus = AudioHardwareDestroyProcessTap(tapID)
+            if destroyTapStatus != noErr {
+                logger.warning("AudioHardwareDestroyProcessTap failed: \(destroyTapStatus)")
+            }
             tapID = AudioObjectID(kAudioObjectUnknown)
         }
         didLogFormat = false
+        actualChannels = 0
+        logger.info("stopCapture end: target=\(self.targetDescription)")
     }
 
     public func stop() {
+        logger.info("AppAudioCapture.stop called for target=\(self.targetDescription)")
         stopCapture()
         if outputListenerInstalled, let listener = outputDeviceChangeListener {
             AudioObjectRemovePropertyListenerBlock(

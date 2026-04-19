@@ -92,6 +92,7 @@ public class AudioCaptureSession {
 
     /// Stop all capture and return the result.
     public func stop() -> AudioCaptureResult {
+        logger.info("Stopping capture session (mode: \(self.modeDescription))")
         appCapture?.stop()
         micCapture?.stop()
 
@@ -109,6 +110,7 @@ public class AudioCaptureSession {
         let actualChannels = appCapture?.actualChannels ?? 0
 
         // Close file handle
+        logger.info("Closing app audio file handle for \(self.appOutputURL.lastPathComponent)")
         try? appFileHandle?.close()
         appFileHandle = nil
 

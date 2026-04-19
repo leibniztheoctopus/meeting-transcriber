@@ -40,6 +40,8 @@ class WatchLoop {
     private var activeRecorder: RecordingProvider?
     private var manualRecordingTask: Task<Void, Never>?
     private var continuousTask: Task<Void, Never>?
+    private var activeContinuousRecorder: RecordingProvider?
+    private var activeContinuousTitle: String?
 
     var isManualRecording: Bool {
         manualRecordingInfo != nil
@@ -128,6 +130,11 @@ class WatchLoop {
         continuousTask?.cancel()
         continuousTask = nil
         currentMeeting = nil
+
+        if mode == .continuous {
+            finalizeActiveContinuousRecorderIfNeeded(reason: "stop")
+        }
+
         cleanupManualRecording()
         transition(to: .idle)
         detail = ""
@@ -138,6 +145,7 @@ class WatchLoop {
         guard mode == .continuous, state != .paused else { return }
         continuousTask?.cancel()
         continuousTask = nil
+        finalizeActiveContinuousRecorderIfNeeded(reason: "pause")
         activeRecorder = nil
         transition(to: .paused)
         detail = "Listening paused"
@@ -265,6 +273,10 @@ class WatchLoop {
         currentMeeting = nil
         transition(to: .recording)
         detail = "Recording: \(title)"
+        activeContinuousRecorder = recorder
+        activeContinuousTitle = title
+
+        logger.info("Continuous chunk start: \(title), duration=\(self.continuousChunkDuration)s")
 
         try recorder.startSystemAudio(
             noMic: noMic,
@@ -279,7 +291,16 @@ class WatchLoop {
             try await Task.sleep(for: .seconds(min(pollInterval, 1.0)))
         }
 
+        guard !Task.isCancelled else {
+            logger.info("Continuous chunk cancelled before rollover: \(title)")
+            return
+        }
+
+        logger.info("Continuous chunk rollover: stopping recorder for \(title)")
         let recording = try recorder.stop()
+        activeContinuousRecorder = nil
+        activeContinuousTitle = nil
+
         enqueueRecording(
             title: title,
             appName: "Continuous Listening",
@@ -288,9 +309,12 @@ class WatchLoop {
             isContinuousCapture: true,
         )
 
+        logger.info("Continuous chunk rollover complete: enqueued \(title)")
+
         if !Task.isCancelled {
             transition(to: .watching)
             detail = "Listening continuously..."
+            try? await Task.sleep(for: .milliseconds(350))
         }
     }
 
@@ -416,6 +440,28 @@ class WatchLoop {
         )
         pipelineQueue?.enqueue(job)
         logger.info("Enqueued pipeline job for: \(title)")
+    }
+
+    private func finalizeActiveContinuousRecorderIfNeeded(reason: String) {
+        guard let recorder = activeContinuousRecorder else { return }
+        let title = activeContinuousTitle ?? Self.continuousChunkTitle()
+        logger.info("Finalizing active continuous recorder due to \(reason): \(title)")
+        do {
+            let recording = try recorder.stop()
+            enqueueRecording(
+                title: title,
+                appName: "Continuous Listening",
+                recording: recording,
+                participants: [],
+                isContinuousCapture: true,
+            )
+            logger.info("Finalized active continuous recorder: \(title)")
+        } catch {
+            logger.error("Failed to finalize active continuous recorder (\(reason)): \(error.localizedDescription)")
+            lastError = error.localizedDescription
+        }
+        activeContinuousRecorder = nil
+        activeContinuousTitle = nil
     }
 
     private func transition(to newState: State) {

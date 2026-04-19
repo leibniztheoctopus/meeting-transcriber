@@ -146,6 +146,8 @@ class DualSourceRecorder: RecordingProvider {
         let recordingStart = recordingStartTime
         isRecording = false
 
+        logger.info("Stopping recording session, startTimestamp=\(self.startTimestamp ?? "nil")")
+
         // Stop capture session and get result
         guard let session = captureSession else {
             throw RecorderError.noAudioData
@@ -153,12 +155,15 @@ class DualSourceRecorder: RecordingProvider {
         let captureResult = session.stop()
         captureSession = nil
 
+        logger.info("Capture session returned appURL=\(captureResult.appAudioFileURL.lastPathComponent), micURL=\(captureResult.micAudioFileURL?.lastPathComponent ?? "nil"), rate=\(captureResult.actualSampleRate), ch=\(captureResult.actualChannels), micDelay=\(captureResult.micDelay)")
+
         let micDelay = captureResult.micDelay
         let actualChannels = captureResult.actualChannels
 
         // Query raw file size before it gets deleted — needed for rate cross-check
         let tempURL = captureResult.appAudioFileURL
         let appRawBytes = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int) ?? 0
+        logger.info("Raw app audio temp file: \(tempURL.lastPathComponent), bytes=\(appRawBytes)")
 
         // Cross-check rate using mic duration (mic file is opened once here, reused below)
         let micDuration: Double? = if let micURL = captureResult.micAudioFileURL,
@@ -232,6 +237,8 @@ class DualSourceRecorder: RecordingProvider {
             logger.warning("No app audio captured — capture may have failed to create the tap")
         }
 
+        logger.info("Post-conversion appPath=\(appPath?.lastPathComponent ?? "nil")")
+
         // ── Load mic audio ──
         var micPath: URL?
         var micSamples: [Float] = []
@@ -251,6 +258,7 @@ class DualSourceRecorder: RecordingProvider {
         // Both app and mic are already at 16kHz at this point.
         let mixRate = targetRate
         let mixPath = recDir.appendingPathComponent("\(ts)_mix.wav")
+        logger.info("Preparing mix output: \(mixPath.lastPathComponent)")
 
         if let app = appPath, let mic = micPath {
             // Delegate mute masking, echo suppression, delay alignment, and mixing
