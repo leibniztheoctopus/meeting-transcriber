@@ -12,6 +12,8 @@ struct MenuBarView: View {
     let onOpenLastProtocol: () -> Void
     let onOpenProtocol: (URL) -> Void
     let onOpenProtocolsFolder: () -> Void
+    let onOpenDebugLog: () -> Void
+    let onOpenDiagnosticsFolder: () -> Void
     let onOpenSettings: () -> Void
     let onNameSpeakers: (() -> Void)?
     let onProcessFiles: () -> Void
@@ -157,15 +159,16 @@ struct MenuBarView: View {
             Label("Open Protocols Folder", systemImage: "folder")
         }
 
-        if let detail = status?.detail, detail.contains("Debug log:") {
-            Button {
-                let path = detail.components(separatedBy: "Debug log: ").last?.components(separatedBy: " • ").first ?? ""
-                if !path.isEmpty {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: path))
-                }
-            } label: {
-                Label("Open Debug Log", systemImage: "doc.text.magnifyingglass")
-            }
+        Button {
+            onOpenDebugLog()
+        } label: {
+            Label("Open Debug Log", systemImage: "doc.text.magnifyingglass")
+        }
+
+        Button {
+            onOpenDiagnosticsFolder()
+        } label: {
+            Label("Open Diagnostics Folder", systemImage: "folder.badge.questionmark")
         }
 
         if let update = updateChecker?.availableUpdate {

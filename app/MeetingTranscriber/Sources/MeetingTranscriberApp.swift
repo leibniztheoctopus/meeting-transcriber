@@ -51,6 +51,8 @@ struct MeetingTranscriberApp: App {
                 onOpenLastProtocol: openLastProtocol,
                 onOpenProtocol: { url in NSWorkspace.shared.open(url) },
                 onOpenProtocolsFolder: openProtocolsFolder,
+                onOpenDebugLog: openDebugLog,
+                onOpenDiagnosticsFolder: openDiagnosticsFolder,
                 onOpenSettings: {
                     bringWindowToFront(id: "settings")
                 },
@@ -211,6 +213,20 @@ struct MeetingTranscriberApp: App {
         defer { if accessing { protocols.stopAccessingSecurityScopedResource() } }
         try? FileManager.default.createDirectory(at: protocols, withIntermediateDirectories: true)
         NSWorkspace.shared.open(protocols)
+    }
+
+    private func openDebugLog() {
+        let logURL = AppFileLogger.shared.logURL
+        try? FileManager.default.createDirectory(at: AppPaths.dataDir, withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: logURL.path) {
+            FileManager.default.createFile(atPath: logURL.path, contents: Data("Debug log created\n".utf8))
+        }
+        NSWorkspace.shared.open(logURL)
+    }
+
+    private func openDiagnosticsFolder() {
+        try? FileManager.default.createDirectory(at: AppPaths.dataDir, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(AppPaths.dataDir)
     }
 
     private func quit() {
