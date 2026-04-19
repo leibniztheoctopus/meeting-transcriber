@@ -332,16 +332,23 @@ class WatchLoop {
         AppFileLogger.shared.log("continuous chunk rollover rotate: \(title)")
         let result = try persistentRecorder.rotateChunk(title: title)
 
-        enqueueRecording(
-            title: result.title,
-            appName: "Continuous Listening",
-            recording: result.recording,
-            participants: [],
-            isContinuousCapture: true,
-        )
-
-        logger.info("Continuous chunk rollover complete: enqueued \(title)")
-        AppFileLogger.shared.log("continuous chunk rollover complete: enqueued \(title)")
+        if shouldEnqueueRecording(result.recording) {
+            enqueueRecording(
+                title: result.title,
+                appName: "Continuous Listening",
+                recording: result.recording,
+                participants: [],
+                isContinuousCapture: true,
+            )
+            logger.info("Continuous chunk rollover complete: enqueued \(title)")
+            AppFileLogger.shared.log("continuous chunk rollover complete: enqueued \(title)")
+        } else {
+            let msg = "Skipped empty continuous chunk: \(title)"
+            logger.warning("\(msg)")
+            AppFileLogger.shared.log(msg)
+            lastError = msg
+            detail = msg
+        }
 
         if !Task.isCancelled {
             transition(to: .watching)
@@ -452,6 +459,17 @@ class WatchLoop {
 
     // MARK: - Helpers
 
+    private func shouldEnqueueRecording(_ recording: RecordingResult) -> Bool {
+        let fm = FileManager.default
+        let paths = [recording.mixPath, recording.appPath, recording.micPath].compactMap { $0 }
+        for path in paths {
+            if let size = try? fm.attributesOfItem(atPath: path.path)[.size] as? Int, size > 44 {
+                return true
+            }
+        }
+        return false
+    }
+
     private func enqueueRecording(
         title: String,
         appName: String,
@@ -479,14 +497,21 @@ class WatchLoop {
         AppFileLogger.shared.log("finalizing persistent continuous recorder due to \(reason): \(title)")
         do {
             if let result = try recorder.stop(finalTitle: title) {
-                enqueueRecording(
-                    title: result.title,
-                    appName: "Continuous Listening",
-                    recording: result.recording,
-                    participants: [],
-                    isContinuousCapture: true,
-                )
-                AppFileLogger.shared.log("finalized persistent continuous recorder: \(title)")
+                if shouldEnqueueRecording(result.recording) {
+                    enqueueRecording(
+                        title: result.title,
+                        appName: "Continuous Listening",
+                        recording: result.recording,
+                        participants: [],
+                        isContinuousCapture: true,
+                    )
+                    AppFileLogger.shared.log("finalized persistent continuous recorder: \(title)")
+                } else {
+                    let msg = "Skipped empty final continuous chunk: \(title)"
+                    logger.warning("\(msg)")
+                    AppFileLogger.shared.log(msg)
+                    lastError = msg
+                }
             }
         } catch {
             logger.error("Failed to finalize persistent continuous recorder (\(reason)): \(error.localizedDescription)")
