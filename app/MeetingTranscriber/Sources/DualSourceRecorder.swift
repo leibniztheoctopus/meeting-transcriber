@@ -351,12 +351,12 @@ class DualSourceRecorder: RecordingProvider {
 
     private static let timestampFormatter: DateFormatter = {
         let fmt = DateFormatter()
-        fmt.dateFormat = "yyyyMMdd_HHmmss"
+        fmt.dateFormat = "yyyyMMdd_HHmmss_SSS"
         return fmt
     }()
 
     private static func timestamp() -> String {
-        timestampFormatter.string(from: Date())
+        "\(timestampFormatter.string(from: Date()))_\(UUID().uuidString.prefix(8))"
     }
 }
 

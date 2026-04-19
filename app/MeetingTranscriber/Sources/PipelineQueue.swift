@@ -658,6 +658,30 @@ class PipelineQueue {
     // MARK: - Audio File Copy
 
     /// Copy recording audio files to the protocol output directory.
+    private static func uniqueDestinationURL(in outputDir: URL, preferredName: String) -> URL {
+        let fm = FileManager.default
+        let ext = (preferredName as NSString).pathExtension
+        let base = ext.isEmpty ? preferredName : ((preferredName as NSString).deletingPathExtension)
+
+        var candidate = outputDir.appendingPathComponent(preferredName)
+        if !fm.fileExists(atPath: candidate.path) {
+            return candidate
+        }
+
+        for index in 2...999 {
+            let name = ext.isEmpty ? "\(base)-\(index)" : "\(base)-\(index).\(ext)"
+            candidate = outputDir.appendingPathComponent(name)
+            if !fm.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+
+        if ext.isEmpty {
+            return outputDir.appendingPathComponent("\(base)-\(UUID().uuidString)")
+        }
+        return outputDir.appendingPathComponent("\(base)-\(UUID().uuidString).\(ext)")
+    }
+
     private static func copyAudioToOutput(
         mixPath: URL, appPath: URL?, micPath: URL?,
         title: String, outputDir: URL,
@@ -675,13 +699,12 @@ class PipelineQueue {
         ].compactMap(\.self)
 
         for (src, name) in audioPaths {
-            let dst = outputDir.appendingPathComponent(name)
+            let dst = uniqueDestinationURL(in: outputDir, preferredName: name)
             do {
-                if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
                 try fm.moveItem(at: src, to: dst)
-                logger.info("Audio moved: \(name)")
+                logger.info("Audio moved: \(dst.lastPathComponent)")
             } catch {
-                logger.warning("Failed to move audio \(name): \(error.localizedDescription)")
+                logger.warning("Failed to move audio \(name) to \(dst.lastPathComponent): \(error.localizedDescription)")
             }
         }
     }
