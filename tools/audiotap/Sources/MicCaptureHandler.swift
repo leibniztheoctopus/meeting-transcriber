@@ -206,23 +206,43 @@ public class MicCaptureHandler {
                 micDebugLog("first mic frame received")
             }
             self.callbackCount += 1
+            let rms: Float
+            let peak: Float
+            let sampleType: String
             if let channelData = buffer.floatChannelData {
                 let samples = UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength))
                 var sumSq: Float = 0
-                var peak: Float = 0
+                var peakValue: Float = 0
                 for sample in samples {
                     let absSample = abs(sample)
                     sumSq += sample * sample
-                    if absSample > peak { peak = absSample }
+                    if absSample > peakValue { peakValue = absSample }
                 }
-                let rms = samples.isEmpty ? 0 : sqrt(sumSq / Float(samples.count))
-                let now = Date().timeIntervalSince1970
-                if self.callbackCount <= 5 || now - self.lastLevelLogTime >= 2 {
-                    self.lastLevelLogTime = now
-                    micDebugLog("callback=\(self.callbackCount) frames=\(buffer.frameLength) rms=\(rms) peak=\(peak)")
+                rms = samples.isEmpty ? 0 : sqrt(sumSq / Float(samples.count))
+                peak = peakValue
+                sampleType = "float"
+            } else if let channelData = buffer.int16ChannelData {
+                let samples = UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength))
+                var sumSq: Float = 0
+                var peakValue: Float = 0
+                for sample in samples {
+                    let normalized = Float(sample) / Float(Int16.max)
+                    let absSample = abs(normalized)
+                    sumSq += normalized * normalized
+                    if absSample > peakValue { peakValue = absSample }
                 }
-            } else if self.callbackCount <= 5 {
-                micDebugLog("callback=\(self.callbackCount) has no floatChannelData")
+                rms = samples.isEmpty ? 0 : sqrt(sumSq / Float(samples.count))
+                peak = peakValue
+                sampleType = "int16"
+            } else {
+                rms = 0
+                peak = 0
+                sampleType = "unknown"
+            }
+            let now = Date().timeIntervalSince1970
+            if self.callbackCount <= 5 || now - self.lastLevelLogTime >= 2 {
+                self.lastLevelLogTime = now
+                micDebugLog("callback=\(self.callbackCount) frames=\(buffer.frameLength) sampleType=\(sampleType) rms=\(rms) peak=\(peak)")
             }
             do {
                 if let converter = self.converter {
