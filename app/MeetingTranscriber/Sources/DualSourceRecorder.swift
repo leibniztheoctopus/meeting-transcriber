@@ -16,9 +16,14 @@ struct RecordingResult {
 
 /// Abstraction for recording, enabling mock injection in tests.
 @MainActor
+enum ContinuousCaptureMode: String {
+    case global
+    case defaultOutput
+}
+
 protocol RecordingProvider {
     func start(appPID: pid_t, noMic: Bool, micDeviceUID: String?) throws
-    func startSystemAudio(noMic: Bool, micDeviceUID: String?) throws
+    func startSystemAudio(noMic: Bool, micDeviceUID: String?, captureMode: ContinuousCaptureMode) throws
     func stop() throws -> RecordingResult
 }
 
@@ -102,6 +107,7 @@ class DualSourceRecorder: RecordingProvider {
     func startSystemAudio(
         noMic: Bool = false,
         micDeviceUID: String? = nil,
+        captureMode: ContinuousCaptureMode = .global,
     ) throws {
         guard !isRecording else { return }
         guard #available(macOS 14.2, *) else {
@@ -118,7 +124,7 @@ class DualSourceRecorder: RecordingProvider {
         let micURL: URL? = noMic ? nil : recDir.appendingPathComponent("\(ts)_mic.wav")
 
         let session = AudioCaptureSession(
-            mode: .global,
+            mode: captureMode == .global ? .global : .defaultOutput,
             appOutputURL: appTempURL,
             sampleRate: recordRate,
             channels: appChannels,
@@ -131,7 +137,8 @@ class DualSourceRecorder: RecordingProvider {
         isRecording = true
         recordingStartTime = ProcessInfo.processInfo.systemUptime
 
-        logger.info("System-audio recording started, \(self.recordRate) Hz, \(self.appChannels)ch")
+        logger.info("System-audio recording started, mode=\(String(describing: captureMode)), \(self.recordRate) Hz, \(self.appChannels)ch")
+        AppFileLogger.shared.log("system-audio recording started: mode=\(String(describing: captureMode)) ts=\(ts)")
     }
 
     /// Stop recording and produce a mixed WAV.
@@ -147,6 +154,7 @@ class DualSourceRecorder: RecordingProvider {
         isRecording = false
 
         logger.info("Stopping recording session, startTimestamp=\(self.startTimestamp ?? "nil")")
+        AppFileLogger.shared.log("stopping recording session: startTimestamp=\(self.startTimestamp ?? "nil")")
 
         // Stop capture session and get result
         guard let session = captureSession else {
@@ -156,6 +164,7 @@ class DualSourceRecorder: RecordingProvider {
         captureSession = nil
 
         logger.info("Capture session returned appURL=\(captureResult.appAudioFileURL.lastPathComponent), micURL=\(captureResult.micAudioFileURL?.lastPathComponent ?? "nil"), rate=\(captureResult.actualSampleRate), ch=\(captureResult.actualChannels), micDelay=\(captureResult.micDelay)")
+        AppFileLogger.shared.log("capture session returned: app=\(captureResult.appAudioFileURL.lastPathComponent) mic=\(captureResult.micAudioFileURL?.lastPathComponent ?? "nil") rate=\(captureResult.actualSampleRate) ch=\(captureResult.actualChannels) micDelay=\(captureResult.micDelay)")
 
         let micDelay = captureResult.micDelay
         let actualChannels = captureResult.actualChannels
@@ -164,6 +173,7 @@ class DualSourceRecorder: RecordingProvider {
         let tempURL = captureResult.appAudioFileURL
         let appRawBytes = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int) ?? 0
         logger.info("Raw app audio temp file: \(tempURL.lastPathComponent), bytes=\(appRawBytes)")
+        AppFileLogger.shared.log("raw app audio temp file: \(tempURL.lastPathComponent) bytes=\(appRawBytes)")
 
         // Cross-check rate using mic duration (mic file is opened once here, reused below)
         let micDuration: Double? = if let micURL = captureResult.micAudioFileURL,
@@ -259,6 +269,7 @@ class DualSourceRecorder: RecordingProvider {
         let mixRate = targetRate
         let mixPath = recDir.appendingPathComponent("\(ts)_mix.wav")
         logger.info("Preparing mix output: \(mixPath.lastPathComponent)")
+        AppFileLogger.shared.log("preparing mix output: \(mixPath.lastPathComponent)")
 
         if let app = appPath, let mic = micPath {
             // Delegate mute masking, echo suppression, delay alignment, and mixing

@@ -60,6 +60,7 @@ class WatchLoop {
     let noMic: Bool
     let micDeviceUID: String?
     let continuousChunkDuration: TimeInterval
+    let continuousCaptureMode: ContinuousCaptureMode
 
     private var watchTask: Task<Void, Never>?
 
@@ -77,6 +78,7 @@ class WatchLoop {
         micDeviceUID: String? = nil,
         mode: Mode = .meetingTriggered,
         continuousChunkDuration: TimeInterval = 300,
+        continuousCaptureMode: ContinuousCaptureMode = .global,
     ) {
         self.detector = detector
         self.recorderFactory = recorderFactory
@@ -88,6 +90,7 @@ class WatchLoop {
         self.micDeviceUID = micDeviceUID
         self.mode = mode
         self.continuousChunkDuration = continuousChunkDuration
+        self.continuousCaptureMode = continuousCaptureMode
     }
 
     nonisolated static var defaultOutputDir: URL {
@@ -277,10 +280,12 @@ class WatchLoop {
         activeContinuousTitle = title
 
         logger.info("Continuous chunk start: \(title), duration=\(self.continuousChunkDuration)s")
+        AppFileLogger.shared.log("continuous chunk start: title=\(title) duration=\(self.continuousChunkDuration)s mode=\(String(describing: self.continuousCaptureMode))")
 
         try recorder.startSystemAudio(
             noMic: noMic,
             micDeviceUID: micDeviceUID,
+            captureMode: continuousCaptureMode,
         )
 
         let startedAt = Date()
@@ -297,6 +302,7 @@ class WatchLoop {
         }
 
         logger.info("Continuous chunk rollover: stopping recorder for \(title)")
+        AppFileLogger.shared.log("continuous chunk rollover stop: \(title)")
         let recording = try recorder.stop()
         activeContinuousRecorder = nil
         activeContinuousTitle = nil
@@ -310,6 +316,7 @@ class WatchLoop {
         )
 
         logger.info("Continuous chunk rollover complete: enqueued \(title)")
+        AppFileLogger.shared.log("continuous chunk rollover complete: enqueued \(title)")
 
         if !Task.isCancelled {
             transition(to: .watching)
@@ -446,6 +453,7 @@ class WatchLoop {
         guard let recorder = activeContinuousRecorder else { return }
         let title = activeContinuousTitle ?? Self.continuousChunkTitle()
         logger.info("Finalizing active continuous recorder due to \(reason): \(title)")
+        AppFileLogger.shared.log("finalizing active continuous recorder due to \(reason): \(title)")
         do {
             let recording = try recorder.stop()
             enqueueRecording(
@@ -456,8 +464,10 @@ class WatchLoop {
                 isContinuousCapture: true,
             )
             logger.info("Finalized active continuous recorder: \(title)")
+            AppFileLogger.shared.log("finalized active continuous recorder: \(title)")
         } catch {
             logger.error("Failed to finalize active continuous recorder (\(reason)): \(error.localizedDescription)")
+            AppFileLogger.shared.log("failed to finalize active continuous recorder (\(reason)): \(error.localizedDescription)")
             lastError = error.localizedDescription
         }
         activeContinuousRecorder = nil

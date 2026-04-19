@@ -160,6 +160,9 @@ final class AppState {
 
                 let detector: MeetingDetecting = PowerAssertionDetector()
 
+                let continuousCaptureMode: ContinuousCaptureMode =
+                    settings.continuousCaptureModeRaw == "global" ? .global : .defaultOutput
+
                 let loop = WatchLoop(
                     detector: detector,
                     pipelineQueue: pipelineQueue,
@@ -169,6 +172,7 @@ final class AppState {
                     micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
                     mode: settings.alwaysListening ? .continuous : .meetingTriggered,
                     continuousChunkDuration: settings.listeningChunkDuration,
+                    continuousCaptureMode: continuousCaptureMode,
                 )
 
                 loop.onStateChange = { [weak loop, notifier] _, newState in

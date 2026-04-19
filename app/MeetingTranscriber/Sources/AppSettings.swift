@@ -97,6 +97,11 @@ final class AppSettings {
         }
     }
 
+    /// Continuous capture source for always-listening mode.
+    var continuousCaptureModeRaw: String = defaults.object(forKey: "continuousCaptureModeRaw") as? String ?? "defaultOutput" {
+        didSet { defaults.set(continuousCaptureModeRaw, forKey: "continuousCaptureModeRaw") }
+    }
+
     // MARK: - Recording
 
     var pollInterval: Double = defaults.object(forKey: "pollInterval") as? Double ?? 3.0 {

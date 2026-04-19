@@ -19,6 +19,7 @@ struct MeetingTranscriberApp: App {
         AppPaths.migrateIfNeeded()
         NotificationManager.shared.setUp()
         DualSourceRecorder.cleanupTempFiles()
+        AppFileLogger.shared.log("MeetingTranscriber app init")
         // Auto-watch: schedule on main run loop after app finishes launching
         if CommandLine.arguments.contains("--auto-watch")
             || UserDefaults.standard.bool(forKey: "autoWatch") {
@@ -105,6 +106,9 @@ struct MeetingTranscriberApp: App {
             }
             .task {
                 await appState.checkPermissions()
+            }
+            .onAppear {
+                AppFileLogger.shared.log("MenuBarExtra appeared")
             }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 // Re-check permissions when the user returns to the app (e.g. from System
