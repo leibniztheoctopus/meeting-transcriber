@@ -3,6 +3,25 @@ import CoreAudio
 import Foundation
 import os.log
 
+private func micDebugLog(_ message: String) {
+    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("MeetingTranscriber", isDirectory: true)
+    guard let dir = base else { return }
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let logURL = dir.appendingPathComponent("meetingtranscriber-debug.log")
+    let line = "[\(ISO8601DateFormatter().string(from: Date()))] [MicCapture] \(message)\n"
+    if !FileManager.default.fileExists(atPath: logURL.path) {
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+    }
+    if let handle = try? FileHandle(forWritingTo: logURL) {
+        defer { try? handle.close() }
+        try? handle.seekToEnd()
+        if let data = line.data(using: .utf8) {
+            try? handle.write(contentsOf: data)
+        }
+    }
+}
+
 private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", category: "MicCapture")
 
 /// Records microphone audio to a WAV file via AVAudioEngine.
@@ -24,6 +43,8 @@ public class MicCaptureHandler {
     /// Pre-computed resampling ratio (fileSampleRate / tapSampleRate), avoids division in audio callback.
     private var resampleRatio: Double = 1.0
     public private(set) var firstFrameTime: UInt64 = 0
+    private var callbackCount: Int = 0
+    private var lastLevelLogTime: TimeInterval = 0
 
     private var defaultInputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultInputDevice,
@@ -59,6 +80,7 @@ public class MicCaptureHandler {
 
     public func start(deviceUID: String? = nil) throws {
         selectedDeviceUID = deviceUID
+        micDebugLog("start requested: output=\(outputURL.lastPathComponent) selectedUID=\(deviceUID ?? "default")")
         try startEngine(deviceUID: deviceUID)
         installDeviceChangeListener()
         installConfigChangeObserver()
@@ -73,6 +95,8 @@ public class MicCaptureHandler {
         }
 
         let inputNode = engine.inputNode
+        callbackCount = 0
+        lastLevelLogTime = 0
 
         if let uid = deviceUID {
             var deviceID = Self.deviceIDForUID(uid)
@@ -85,18 +109,22 @@ public class MicCaptureHandler {
                     &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size),
                 )
                 logger.info("Mic device set: \(uid) (ID \(deviceID))")
+                micDebugLog("device set explicitly: uid=\(uid) id=\(deviceID)")
             } else {
                 logger.warning("Unknown mic device UID '\(uid)', using default")
+                micDebugLog("unknown selected mic uid, falling back to default: \(uid)")
             }
         }
 
         let hwFormat = inputNode.outputFormat(forBus: 0)
         logger.info("Mic hardware format: \(hwFormat.sampleRate) Hz, \(hwFormat.channelCount)ch")
+        micDebugLog("hardware format: rate=\(hwFormat.sampleRate) channels=\(hwFormat.channelCount)")
 
         let tapFormat = AVAudioFormat(
             standardFormatWithSampleRate: hwFormat.sampleRate, channels: 1,
         )! // swiftlint:disable:this force_unwrapping
         logger.info("Mic tap format: \(tapFormat.sampleRate) Hz, \(tapFormat.channelCount)ch")
+        micDebugLog("tap format: rate=\(tapFormat.sampleRate) channels=\(tapFormat.channelCount)")
 
         // Always 16kHz — WhisperKit target rate
         if outputFile == nil {
@@ -127,6 +155,7 @@ public class MicCaptureHandler {
             converter = AVAudioConverter(from: tapFormat, to: outputFormat)
             resampleRatio = fileSampleRate / tapFormat.sampleRate
             logger.info("Mic: resampling \(Int(tapFormat.sampleRate))→\(Int(self.fileSampleRate)) Hz")
+            micDebugLog("resampling enabled: \(Int(tapFormat.sampleRate))->\(Int(self.fileSampleRate))")
         }
 
         // swiftlint:disable closure_parameter_position closure_body_length
@@ -136,6 +165,26 @@ public class MicCaptureHandler {
             guard let self else { return }
             if self.firstFrameTime == 0 {
                 self.firstFrameTime = mach_absolute_time()
+                micDebugLog("first mic frame received")
+            }
+            self.callbackCount += 1
+            if let channelData = buffer.floatChannelData {
+                let samples = UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength))
+                var sumSq: Float = 0
+                var peak: Float = 0
+                for sample in samples {
+                    let absSample = abs(sample)
+                    sumSq += sample * sample
+                    if absSample > peak { peak = absSample }
+                }
+                let rms = samples.isEmpty ? 0 : sqrt(sumSq / Float(samples.count))
+                let now = Date().timeIntervalSince1970
+                if self.callbackCount <= 5 || now - self.lastLevelLogTime >= 2 {
+                    self.lastLevelLogTime = now
+                    micDebugLog("callback=\(self.callbackCount) frames=\(buffer.frameLength) rms=\(rms) peak=\(peak)")
+                }
+            } else if self.callbackCount <= 5 {
+                micDebugLog("callback=\(self.callbackCount) has no floatChannelData")
             }
             do {
                 if let converter = self.converter {
@@ -159,14 +208,18 @@ public class MicCaptureHandler {
                     }
                     if let error {
                         logger.warning("Mic resample error: \(error)")
+                        micDebugLog("resample error: \(error.localizedDescription)")
                     } else {
                         try self.outputFile?.write(from: outputBuffer)
+                        if self.callbackCount <= 3 { micDebugLog("wrote resampled mic buffer: frames=\(outputBuffer.frameLength)") }
                     }
                 } else {
                     try self.outputFile?.write(from: buffer)
+                    if self.callbackCount <= 3 { micDebugLog("wrote native mic buffer: frames=\(buffer.frameLength)") }
                 }
             } catch {
                 logger.warning("Mic write error: \(error)")
+                micDebugLog("write error: \(error.localizedDescription)")
             }
         }
 
@@ -174,6 +227,7 @@ public class MicCaptureHandler {
         try engine.start()
         isRecording = true
         logger.info("Mic recording started: \(self.outputURL.lastPathComponent)")
+        micDebugLog("engine started: output=\(self.outputURL.lastPathComponent)")
     }
 
     private func installDeviceChangeListener() {
@@ -190,8 +244,10 @@ public class MicCaptureHandler {
         if status == noErr {
             deviceChangeListener = listener
             logger.info("Mic: listening for default input device changes")
+            micDebugLog("installed default input device listener")
         } else {
             logger.warning("Failed to install device change listener (status: \(status))")
+            micDebugLog("failed to install device change listener: status=\(status)")
         }
     }
 
@@ -206,15 +262,18 @@ public class MicCaptureHandler {
             self?.handleEngineConfigChange()
         }
         logger.info("Mic: listening for engine configuration changes")
+        micDebugLog("installed engine configuration observer")
     }
 
     private func handleEngineConfigChange() {
         logger.info("Mic: engine configuration changed (format/route change)")
+        micDebugLog("engine configuration changed")
         handleDeviceChange()
     }
 
     private func handleDefaultInputDeviceChanged() {
         logger.info("Mic: default input device changed")
+        micDebugLog("default input device changed")
         handleDeviceChange()
     }
 
@@ -242,6 +301,7 @@ public class MicCaptureHandler {
 
         if deviceUID == nil, let uid = selectedDeviceUID {
             logger.warning("Mic: selected device '\(uid)' no longer available, falling back to system default")
+            micDebugLog("selected device unavailable, falling back to default: \(uid)")
         }
 
         engine.inputNode.removeTap(onBus: 0)
@@ -264,9 +324,11 @@ public class MicCaptureHandler {
             }
             installConfigChangeObserver()
             logger.info("Mic: engine restarted on \(deviceUID != nil ? "selected" : "default") device (\(Int(hwRate)) Hz)")
+            micDebugLog("engine restarted on \(deviceUID != nil ? "selected" : "default") device, rate=\(Int(hwRate))")
         } catch {
             isRecording = false
             logger.error("Failed to restart mic after device change: \(error)")
+            micDebugLog("failed to restart mic after device change: \(error.localizedDescription)")
         }
     }
 
@@ -290,6 +352,7 @@ public class MicCaptureHandler {
         engine.reset()
         outputFile = nil
         logger.info("Mic recording stopped")
+        micDebugLog("recording stopped: callbacks=\(callbackCount)")
     }
 }
 
