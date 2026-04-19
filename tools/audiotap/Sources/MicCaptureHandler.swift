@@ -15,7 +15,7 @@ private func micDebugLog(_ message: String) {
     }
     if let handle = try? FileHandle(forWritingTo: logURL) {
         defer { try? handle.close() }
-        try? handle.seekToEnd()
+        _ = try? handle.seekToEnd()
         if let data = line.data(using: .utf8) {
             try? handle.write(contentsOf: data)
         }
@@ -24,27 +24,22 @@ private func micDebugLog(_ message: String) {
 
 private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", category: "MicCapture")
 
-/// Records microphone audio to a WAV file via AVAudioEngine.
-/// Monitors for device changes via CoreAudio property listener (default input device)
-/// and AVAudioEngine configuration change notification (format/route changes).
-/// Automatically restarts the engine on device switch, preserving the selected device
-/// when still available or falling back to system default with a warning.
-public class MicCaptureHandler {
-    private var engine = AVAudioEngine()
-    private var outputFile: AVAudioFile?
+public class MicCaptureHandler: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     private let outputURL: URL
     private var isRecording = false
     private var isRestarting = false
     private var deviceChangeListener: AudioObjectPropertyListenerBlock?
     private var configChangeObserver: NSObjectProtocol?
     private var selectedDeviceUID: String?
-    private var fileSampleRate: Double = 0
-    private var converter: AVAudioConverter?
-    /// Pre-computed resampling ratio (fileSampleRate / tapSampleRate), avoids division in audio callback.
-    private var resampleRatio: Double = 1.0
     public private(set) var firstFrameTime: UInt64 = 0
     private var callbackCount: Int = 0
     private var lastLevelLogTime: TimeInterval = 0
+
+    private var session: AVCaptureSession?
+    private var audioOutput: AVCaptureAudioDataOutput?
+    private let callbackQueue = DispatchQueue(label: "com.meetingtranscriber.miccapture")
+    private var assetWriter: AVAssetWriter?
+    private var writerInput: AVAssetWriterInput?
 
     private var defaultInputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultInputDevice,
@@ -89,7 +84,7 @@ public class MicCaptureHandler {
         let status = AudioObjectGetPropertyData(
             AudioObjectID(kAudioObjectSystemObject),
             &address, 0, nil,
-            &size, &deviceID
+            &size, &deviceID,
         )
         return status == noErr ? deviceID : kAudioObjectUnknown
     }
@@ -100,10 +95,13 @@ public class MicCaptureHandler {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain,
         )
-        var value: CFString = "" as CFString
-        var size = UInt32(MemoryLayout<CFString>.size)
-        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &value)
-        return status == noErr ? (value as String) : nil
+        var unmanaged: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let status = withUnsafeMutablePointer(to: &unmanaged) { ptr in
+            AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, ptr)
+        }
+        guard status == noErr, let unmanaged else { return nil }
+        return unmanaged.takeUnretainedValue() as String
     }
 
     public func start(deviceUID: String? = nil) throws {
@@ -114,35 +112,14 @@ public class MicCaptureHandler {
         installConfigChangeObserver()
     }
 
-    // swiftlint:disable:next function_body_length
     private func startEngine(deviceUID: String? = nil) throws {
-        // No input device available (e.g. Mac Mini server without mic hardware) —
-        // accessing AVAudioEngine.inputNode would throw an uncatchable NSException.
         guard AVCaptureDevice.default(for: .audio) != nil else {
             throw MicCaptureError.noInputDevice
         }
 
-        let inputNode = engine.inputNode
         callbackCount = 0
         lastLevelLogTime = 0
-
-        if let uid = deviceUID {
-            var deviceID = Self.deviceIDForUID(uid)
-            if deviceID != kAudioObjectUnknown {
-                let audioUnit = inputNode.audioUnit! // swiftlint:disable:this force_unwrapping
-                AudioUnitSetProperty(
-                    audioUnit,
-                    kAudioOutputUnitProperty_CurrentDevice,
-                    kAudioUnitScope_Global, 0,
-                    &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size),
-                )
-                logger.info("Mic device set: \(uid) (ID \(deviceID))")
-                micDebugLog("device set explicitly: uid=\(uid) id=\(deviceID)")
-            } else {
-                logger.warning("Unknown mic device UID '\(uid)', using default")
-                micDebugLog("unknown selected mic uid, falling back to default: \(uid)")
-            }
-        }
+        firstFrameTime = 0
 
         let defaultDeviceID = Self.defaultInputDeviceID()
         if defaultDeviceID != kAudioObjectUnknown {
@@ -151,141 +128,59 @@ public class MicCaptureHandler {
             micDebugLog("default input device: name=\(defaultName) uid=\(defaultUID) id=\(defaultDeviceID)")
         }
 
-        let hwFormat = inputNode.inputFormat(forBus: 0)
-        logger.info("Mic hardware format: \(hwFormat.sampleRate) Hz, \(hwFormat.channelCount)ch")
-        micDebugLog("hardware input format: rate=\(hwFormat.sampleRate) channels=\(hwFormat.channelCount)")
-
-        let engineFormat = inputNode.outputFormat(forBus: 0)
-        micDebugLog("engine output format: rate=\(engineFormat.sampleRate) channels=\(engineFormat.channelCount)")
-
-        let tapFormat = AVAudioFormat(
-            standardFormatWithSampleRate: hwFormat.sampleRate, channels: 1,
-        )! // swiftlint:disable:this force_unwrapping
-        logger.info("Mic tap format: \(tapFormat.sampleRate) Hz, \(tapFormat.channelCount)ch")
-        micDebugLog("tap format: rate=\(tapFormat.sampleRate) channels=\(tapFormat.channelCount)")
-
-        // Always 16kHz — WhisperKit target rate
-        if outputFile == nil {
-            fileSampleRate = speechSampleRate
-            let wavSettings: [String: Any] = [
-                AVFormatIDKey: kAudioFormatLinearPCM,
-                AVSampleRateKey: fileSampleRate,
-                AVNumberOfChannelsKey: 1,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false,
-                AVLinearPCMIsBigEndianKey: false,
-                AVLinearPCMIsNonInterleaved: false,
-            ]
-            outputFile = try AVAudioFile(forWriting: outputURL, settings: wavSettings)
-            // Restrict permissions to owner-only (0600) — audio may contain sensitive meeting content
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o600],
-                ofItemAtPath: outputURL.path,
-            )
+        let device = if let uid = deviceUID,
+                        let found = AVCaptureDevice.devices(for: .audio).first(where: { $0.uniqueID == uid || $0.localizedName == uid }) {
+            found
+        } else {
+            AVCaptureDevice.default(for: .audio)!
         }
 
-        converter = nil
-        resampleRatio = 1.0
-        if tapFormat.sampleRate != fileSampleRate {
-            let outputFormat = AVAudioFormat(
-                standardFormatWithSampleRate: fileSampleRate, channels: 1,
-            )! // swiftlint:disable:this force_unwrapping
-            converter = AVAudioConverter(from: tapFormat, to: outputFormat)
-            resampleRatio = fileSampleRate / tapFormat.sampleRate
-            logger.info("Mic: resampling \(Int(tapFormat.sampleRate))→\(Int(self.fileSampleRate)) Hz")
-            micDebugLog("resampling enabled: \(Int(tapFormat.sampleRate))->\(Int(self.fileSampleRate))")
-        }
+        micDebugLog("capture device: localizedName=\(device.localizedName) uniqueID=\(device.uniqueID)")
 
-        // swiftlint:disable closure_parameter_position closure_body_length
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) {
-            [weak self] buffer, _ in
-            // swiftlint:enable closure_parameter_position closure_body_length
-            guard let self else { return }
-            if self.firstFrameTime == 0 {
-                self.firstFrameTime = mach_absolute_time()
-                micDebugLog("first mic frame received")
-            }
-            self.callbackCount += 1
-            let rms: Float
-            let peak: Float
-            let sampleType: String
-            if let channelData = buffer.floatChannelData {
-                let samples = UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength))
-                var sumSq: Float = 0
-                var peakValue: Float = 0
-                for sample in samples {
-                    let absSample = abs(sample)
-                    sumSq += sample * sample
-                    if absSample > peakValue { peakValue = absSample }
-                }
-                rms = samples.isEmpty ? 0 : sqrt(sumSq / Float(samples.count))
-                peak = peakValue
-                sampleType = "float"
-            } else if let channelData = buffer.int16ChannelData {
-                let samples = UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength))
-                var sumSq: Float = 0
-                var peakValue: Float = 0
-                for sample in samples {
-                    let normalized = Float(sample) / Float(Int16.max)
-                    let absSample = abs(normalized)
-                    sumSq += normalized * normalized
-                    if absSample > peakValue { peakValue = absSample }
-                }
-                rms = samples.isEmpty ? 0 : sqrt(sumSq / Float(samples.count))
-                peak = peakValue
-                sampleType = "int16"
-            } else {
-                rms = 0
-                peak = 0
-                sampleType = "unknown"
-            }
-            let now = Date().timeIntervalSince1970
-            if self.callbackCount <= 5 || now - self.lastLevelLogTime >= 2 {
-                self.lastLevelLogTime = now
-                micDebugLog("callback=\(self.callbackCount) frames=\(buffer.frameLength) sampleType=\(sampleType) rms=\(rms) peak=\(peak)")
-            }
-            do {
-                if let converter = self.converter {
-                    let outputFrames = AVAudioFrameCount(
-                        Double(buffer.frameLength) * self.resampleRatio,
-                    )
-                    guard let outputBuffer = AVAudioPCMBuffer(
-                        pcmFormat: converter.outputFormat,
-                        frameCapacity: outputFrames,
-                    ) else { return }
-                    var error: NSError?
-                    var consumed = false
-                    converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-                        if consumed {
-                            outStatus.pointee = .noDataNow
-                            return nil
-                        }
-                        consumed = true
-                        outStatus.pointee = .haveData
-                        return buffer
-                    }
-                    if let error {
-                        logger.warning("Mic resample error: \(error)")
-                        micDebugLog("resample error: \(error.localizedDescription)")
-                    } else {
-                        try self.outputFile?.write(from: outputBuffer)
-                        if self.callbackCount <= 3 { micDebugLog("wrote resampled mic buffer: frames=\(outputBuffer.frameLength)") }
-                    }
-                } else {
-                    try self.outputFile?.write(from: buffer)
-                    if self.callbackCount <= 3 { micDebugLog("wrote native mic buffer: frames=\(buffer.frameLength)") }
-                }
-            } catch {
-                logger.warning("Mic write error: \(error)")
-                micDebugLog("write error: \(error.localizedDescription)")
-            }
-        }
+        let captureSession = AVCaptureSession()
+        captureSession.beginConfiguration()
 
-        engine.prepare()
-        try engine.start()
+        let input = try AVCaptureDeviceInput(device: device)
+        guard captureSession.canAddInput(input) else {
+            throw MicCaptureError.sessionConfigurationFailed
+        }
+        captureSession.addInput(input)
+
+        let output = AVCaptureAudioDataOutput()
+        output.setSampleBufferDelegate(self, queue: callbackQueue)
+        guard captureSession.canAddOutput(output) else {
+            throw MicCaptureError.sessionConfigurationFailed
+        }
+        captureSession.addOutput(output)
+        captureSession.commitConfiguration()
+
+        try? FileManager.default.removeItem(at: outputURL)
+        let writer = try AVAssetWriter(outputURL: outputURL, fileType: .wav)
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: speechSampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+        let writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
+        writerInput.expectsMediaDataInRealTime = true
+        guard writer.canAdd(writerInput) else {
+            throw MicCaptureError.sessionConfigurationFailed
+        }
+        writer.add(writerInput)
+
+        assetWriter = writer
+        self.writerInput = writerInput
+        session = captureSession
+        audioOutput = output
+
+        captureSession.startRunning()
         isRecording = true
         logger.info("Mic recording started: \(self.outputURL.lastPathComponent)")
-        micDebugLog("engine started: output=\(self.outputURL.lastPathComponent)")
+        micDebugLog("capture session started: output=\(self.outputURL.lastPathComponent)")
     }
 
     private func installDeviceChangeListener() {
@@ -309,23 +204,22 @@ public class MicCaptureHandler {
         }
     }
 
-    /// Listen for AVAudioEngine configuration changes (format changes on current device).
     private func installConfigChangeObserver() {
         guard configChangeObserver == nil else { return }
         configChangeObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange,
-            object: engine,
+            forName: AVCaptureDevice.wasConnectedNotification,
+            object: nil,
             queue: .main,
         ) { [weak self] _ in
             self?.handleEngineConfigChange()
         }
-        logger.info("Mic: listening for engine configuration changes")
-        micDebugLog("installed engine configuration observer")
+        logger.info("Mic: listening for capture device changes")
+        micDebugLog("installed capture device observer")
     }
 
     private func handleEngineConfigChange() {
-        logger.info("Mic: engine configuration changed (format/route change)")
-        micDebugLog("engine configuration changed")
+        logger.info("Mic: capture configuration changed")
+        micDebugLog("capture configuration changed")
         handleDeviceChange()
     }
 
@@ -347,7 +241,6 @@ public class MicCaptureHandler {
         switch action {
         case let .restart(deviceUID):
             executeRestart(deviceUID: deviceUID)
-
         case .skip:
             break
         }
@@ -362,30 +255,14 @@ public class MicCaptureHandler {
             micDebugLog("selected device unavailable, falling back to default: \(uid)")
         }
 
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        engine.reset()
-
-        if let observer = configChangeObserver {
-            NotificationCenter.default.removeObserver(observer)
-            configChangeObserver = nil
-        }
-
-        // AVAudioEngine can be in a bad state after config change — must recreate
-        engine = AVAudioEngine()
-
+        stop()
         do {
-            try startEngine(deviceUID: deviceUID)
-            let hwRate = engine.inputNode.outputFormat(forBus: 0).sampleRate
-            if hwRate <= 0 {
-                logger.warning("Mic: hardware format rate is \(hwRate) after restart — may produce incorrect audio")
-            }
-            installConfigChangeObserver()
-            logger.info("Mic: engine restarted on \(deviceUID != nil ? "selected" : "default") device (\(Int(hwRate)) Hz)")
-            micDebugLog("engine restarted on \(deviceUID != nil ? "selected" : "default") device, rate=\(Int(hwRate))")
+            try start(deviceUID: deviceUID)
+            logger.info("Mic: capture session restarted on \(deviceUID != nil ? "selected" : "default") device")
+            micDebugLog("capture session restarted on \(deviceUID != nil ? "selected" : "default") device")
         } catch {
             isRecording = false
-            logger.error("Failed to restart mic after device change: \(error)")
+            logger.error("Failed to restart mic after device change: \(error.localizedDescription)")
             micDebugLog("failed to restart mic after device change: \(error.localizedDescription)")
         }
     }
@@ -405,21 +282,94 @@ public class MicCaptureHandler {
             NotificationCenter.default.removeObserver(observer)
             configChangeObserver = nil
         }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        engine.reset()
-        outputFile = nil
+        audioOutput?.setSampleBufferDelegate(nil, queue: nil)
+        session?.stopRunning()
+        if let writerInput { writerInput.markAsFinished() }
+        if let assetWriter, assetWriter.status == .writing {
+            let semaphore = DispatchSemaphore(value: 0)
+            assetWriter.finishWriting { semaphore.signal() }
+            _ = semaphore.wait(timeout: .now() + 2)
+        }
+        session = nil
+        audioOutput = nil
+        assetWriter = nil
+        writerInput = nil
         logger.info("Mic recording stopped")
         micDebugLog("recording stopped: callbacks=\(callbackCount)")
+    }
+
+    public func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection,
+    ) {
+        if firstFrameTime == 0 {
+            firstFrameTime = mach_absolute_time()
+            micDebugLog("first mic frame received")
+        }
+        callbackCount += 1
+
+        if let desc = CMSampleBufferGetFormatDescription(sampleBuffer), callbackCount == 1,
+           let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc)?.pointee {
+            micDebugLog("sample buffer format: rate=\(asbd.mSampleRate) channels=\(asbd.mChannelsPerFrame) formatID=\(asbd.mFormatID)")
+        }
+
+        var rms: Float = 0
+        var peak: Float = 0
+        if let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) {
+            let length = CMBlockBufferGetDataLength(blockBuffer)
+            var data = Data(count: length)
+            data.withUnsafeMutableBytes { ptr in
+                if let base = ptr.baseAddress {
+                    CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: base)
+                }
+            }
+            let sampleCount = length / MemoryLayout<Int16>.size
+            if sampleCount > 0 {
+                data.withUnsafeBytes { raw in
+                    let samples = raw.bindMemory(to: Int16.self)
+                    var sumSq: Float = 0
+                    var peakValue: Float = 0
+                    for sample in samples {
+                        let normalized = Float(sample) / Float(Int16.max)
+                        let absSample = abs(normalized)
+                        sumSq += normalized * normalized
+                        if absSample > peakValue { peakValue = absSample }
+                    }
+                    rms = sqrt(sumSq / Float(samples.count))
+                    peak = peakValue
+                }
+            }
+            let now = Date().timeIntervalSince1970
+            if callbackCount <= 5 || now - lastLevelLogTime >= 2 {
+                lastLevelLogTime = now
+                micDebugLog("callback=\(callbackCount) bytes=\(length) rms=\(rms) peak=\(peak)")
+            }
+        }
+
+        guard let assetWriter, let writerInput else { return }
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        if assetWriter.status == .unknown {
+            assetWriter.startWriting()
+            assetWriter.startSession(atSourceTime: pts)
+            micDebugLog("asset writer session started")
+        }
+        if writerInput.isReadyForMoreMediaData {
+            if !writerInput.append(sampleBuffer) {
+                micDebugLog("writer append failed: \(assetWriter.error?.localizedDescription ?? "unknown")")
+            }
+        }
     }
 }
 
 public enum MicCaptureError: LocalizedError {
     case noInputDevice
+    case sessionConfigurationFailed
 
     public var errorDescription: String? {
         switch self {
         case .noInputDevice: "No microphone hardware available"
+        case .sessionConfigurationFailed: "Failed to configure microphone capture session"
         }
     }
 }
