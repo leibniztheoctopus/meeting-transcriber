@@ -18,7 +18,7 @@ public class AppAudioCapture {
     private let target: CaptureTarget
     private let sampleRate: Int
     private let channels: Int
-    private let outputFileDescriptor: Int32
+    private var outputFileDescriptor: Int32
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
@@ -296,7 +296,6 @@ public class AppAudioCapture {
         logger.info("Created aggregate device: \(self.aggregateID)")
 
         // Set up IOProc to read audio data and write to file descriptor
-        let fd = outputFileDescriptor
         var newProcID: AudioDeviceIOProcID?
         let ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(
             &newProcID, aggregateID, writeQueue,
@@ -334,7 +333,7 @@ public class AppAudioCapture {
 
             // CATapDescription delivers interleaved float32 — write directly
             guard let data = abl.mBuffers.mData else { return }
-            writeAllToFileHandle(fd, data, count: Int(abl.mBuffers.mDataByteSize))
+            writeAllToFileHandle(self.outputFileDescriptor, data, count: Int(abl.mBuffers.mDataByteSize))
         }
 
         guard ioProcStatus == noErr, let validProcID = newProcID else {
@@ -462,6 +461,15 @@ public class AppAudioCapture {
         didLogFormat = false
         actualChannels = 0
         logger.info("stopCapture end: target=\(self.targetDescription)")
+    }
+
+    public func updateOutputFileDescriptor(_ newFD: Int32) throws {
+        guard isRunning else {
+            outputFileDescriptor = newFD
+            return
+        }
+        outputFileDescriptor = newFD
+        logger.info("Updated output file descriptor for target=\(self.targetDescription)")
     }
 
     public func stop() {

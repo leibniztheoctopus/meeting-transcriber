@@ -42,6 +42,8 @@ class WatchLoop {
     private var continuousTask: Task<Void, Never>?
     private var activeContinuousRecorder: RecordingProvider?
     private var activeContinuousTitle: String?
+    @ObservationIgnored
+    private var persistentContinuousRecorder: AnyObject?
 
     var isManualRecording: Bool {
         manualRecordingInfo != nil
@@ -115,6 +117,15 @@ class WatchLoop {
         logger.info("Listen mode started (mode: \(self.mode == .continuous ? "continuous" : "meeting"), poll: \(self.pollInterval)s, grace: \(self.endGracePeriod)s)")
 
         if mode == .continuous {
+            if #available(macOS 14.2, *) {
+                if persistentContinuousRecorder == nil {
+                    persistentContinuousRecorder = PersistentContinuousRecorder(
+                        captureMode: continuousCaptureMode,
+                        noMic: noMic,
+                        micDeviceUID: micDeviceUID,
+                    )
+                }
+            }
             continuousTask = Task { [weak self] in
                 guard let self else { return }
                 await self.continuousLoop()
@@ -135,6 +146,7 @@ class WatchLoop {
         currentMeeting = nil
 
         if mode == .continuous {
+            finalizePersistentContinuousRecorderIfNeeded(reason: "stop")
             finalizeActiveContinuousRecorderIfNeeded(reason: "stop")
         }
 
@@ -148,6 +160,7 @@ class WatchLoop {
         guard mode == .continuous, state != .paused else { return }
         continuousTask?.cancel()
         continuousTask = nil
+        finalizePersistentContinuousRecorderIfNeeded(reason: "pause")
         finalizeActiveContinuousRecorderIfNeeded(reason: "pause")
         activeRecorder = nil
         transition(to: .paused)
@@ -270,23 +283,37 @@ class WatchLoop {
     }
 
     private func runContinuousChunk() async throws {
-        let recorder = recorderFactory()
         let title = Self.continuousChunkTitle()
 
         currentMeeting = nil
         transition(to: .recording)
         detail = "Recording: \(title)"
-        activeContinuousRecorder = recorder
-        activeContinuousTitle = title
 
-        logger.info("Continuous chunk start: \(title), duration=\(self.continuousChunkDuration)s")
-        AppFileLogger.shared.log("continuous chunk start: title=\(title) duration=\(self.continuousChunkDuration)s mode=\(String(describing: self.continuousCaptureMode))")
+        guard #available(macOS 14.2, *) else {
+            throw RecorderError.unsupportedOS
+        }
 
-        try recorder.startSystemAudio(
-            noMic: noMic,
-            micDeviceUID: micDeviceUID,
-            captureMode: continuousCaptureMode,
-        )
+        let persistentRecorder: PersistentContinuousRecorder
+        if let existing = persistentContinuousRecorder as? PersistentContinuousRecorder {
+            persistentRecorder = existing
+        } else {
+            let created = PersistentContinuousRecorder(
+                captureMode: continuousCaptureMode,
+                noMic: noMic,
+                micDeviceUID: micDeviceUID,
+            )
+            persistentContinuousRecorder = created
+            persistentRecorder = created
+        }
+
+        if !persistentRecorder.isRecording {
+            logger.info("Continuous capture bootstrap start: \(title), duration=\(self.continuousChunkDuration)s")
+            AppFileLogger.shared.log("continuous capture bootstrap start: title=\(title) duration=\(self.continuousChunkDuration)s mode=\(String(describing: self.continuousCaptureMode))")
+            try persistentRecorder.start()
+        } else {
+            logger.info("Continuous chunk window start: \(title)")
+            AppFileLogger.shared.log("continuous chunk window start: \(title)")
+        }
 
         let startedAt = Date()
         while !Task.isCancelled {
@@ -301,16 +328,14 @@ class WatchLoop {
             return
         }
 
-        logger.info("Continuous chunk rollover: stopping recorder for \(title)")
-        AppFileLogger.shared.log("continuous chunk rollover stop: \(title)")
-        let recording = try recorder.stop()
-        activeContinuousRecorder = nil
-        activeContinuousTitle = nil
+        logger.info("Continuous chunk rollover: rotating persistent recorder for \(title)")
+        AppFileLogger.shared.log("continuous chunk rollover rotate: \(title)")
+        let result = try persistentRecorder.rotateChunk(title: title)
 
         enqueueRecording(
-            title: title,
+            title: result.title,
             appName: "Continuous Listening",
-            recording: recording,
+            recording: result.recording,
             participants: [],
             isContinuousCapture: true,
         )
@@ -321,7 +346,6 @@ class WatchLoop {
         if !Task.isCancelled {
             transition(to: .watching)
             detail = "Listening continuously..."
-            try? await Task.sleep(for: .milliseconds(350))
         }
     }
 
@@ -447,6 +471,30 @@ class WatchLoop {
         )
         pipelineQueue?.enqueue(job)
         logger.info("Enqueued pipeline job for: \(title)")
+    }
+
+    private func finalizePersistentContinuousRecorderIfNeeded(reason: String) {
+        guard #available(macOS 14.2, *), let recorder = persistentContinuousRecorder as? PersistentContinuousRecorder else { return }
+        let title = activeContinuousTitle ?? Self.continuousChunkTitle()
+        AppFileLogger.shared.log("finalizing persistent continuous recorder due to \(reason): \(title)")
+        do {
+            if let result = try recorder.stop(finalTitle: title) {
+                enqueueRecording(
+                    title: result.title,
+                    appName: "Continuous Listening",
+                    recording: result.recording,
+                    participants: [],
+                    isContinuousCapture: true,
+                )
+                AppFileLogger.shared.log("finalized persistent continuous recorder: \(title)")
+            }
+        } catch {
+            logger.error("Failed to finalize persistent continuous recorder (\(reason)): \(error.localizedDescription)")
+            AppFileLogger.shared.log("failed to finalize persistent continuous recorder (\(reason)): \(error.localizedDescription)")
+            lastError = error.localizedDescription
+        }
+        persistentContinuousRecorder = nil
+        activeContinuousTitle = nil
     }
 
     private func finalizeActiveContinuousRecorderIfNeeded(reason: String) {
