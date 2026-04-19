@@ -53,10 +53,18 @@ struct MenuBarView: View {
         // Error info
         if let error = status?.error, state == .error {
             Divider()
-            Text(error)
-                .font(.caption)
-                .foregroundStyle(.red)
-                .padding(.horizontal, 4)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                if let detail = status?.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(.horizontal, 4)
         }
 
         Divider()
@@ -147,6 +155,17 @@ struct MenuBarView: View {
             onOpenProtocolsFolder()
         } label: {
             Label("Open Protocols Folder", systemImage: "folder")
+        }
+
+        if let detail = status?.detail, detail.contains("Debug log:") {
+            Button {
+                let path = detail.components(separatedBy: "Debug log: ").last?.components(separatedBy: " • ").first ?? ""
+                if !path.isEmpty {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                }
+            } label: {
+                Label("Open Debug Log", systemImage: "doc.text.magnifyingglass")
+            }
         }
 
         if let update = updateChecker?.availableUpdate {

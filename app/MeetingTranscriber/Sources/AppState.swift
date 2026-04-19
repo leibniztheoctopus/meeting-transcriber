@@ -43,6 +43,7 @@ final class AppState {
     var pipelineQueue: PipelineQueue
     var updateChecker: UpdateChecker
     var permissionHealth: HealthCheckResult?
+    var debugMessage: String?
 
     // MARK: - Init
 
@@ -134,7 +135,10 @@ final class AppState {
             version: 1,
             timestamp: Self.isoFormatter.string(from: Date()),
             state: loop.transcriberState,
-            detail: loop.detail,
+            detail: [loop.detail, debugMessage].compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }.joined(separator: " • "),
             meeting: meeting,
             protocolPath: nil,
             error: loop.lastError,
@@ -175,7 +179,11 @@ final class AppState {
                     continuousCaptureMode: continuousCaptureMode,
                 )
 
-                loop.onStateChange = { [weak loop, notifier] _, newState in
+                loop.onStateChange = { [weak self, weak loop, notifier] _, newState in
+                    self?.debugMessage = loop?.lastError
+                    if let err = loop?.lastError {
+                        AppFileLogger.shared.log("watch loop state change error: \(err)")
+                    }
                     switch newState {
                     case .recording:
                         if let meeting = loop?.currentMeeting {
@@ -192,6 +200,7 @@ final class AppState {
 
                     case .error:
                         if let err = loop?.lastError {
+                            self?.debugMessage = err
                             notifier.notify(title: "Error", body: err)
                         }
 
@@ -207,6 +216,7 @@ final class AppState {
                 configurePipelineCallbacks()
 
                 watchLoop = loop
+                self.debugMessage = "Debug log: \(AppFileLogger.shared.logURL.path)"
                 loop.start()
             }
         }
