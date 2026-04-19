@@ -168,16 +168,35 @@ enum PermissionHealthCheck {
         }
     }
 
-    /// Thread-safe counter for mic probe buffer arrival (tap callback runs on audio thread).
+    /// Thread-safe mic probe stats (tap callback runs on audio thread).
     private final class BufferCounter: @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0
-        func increment() {
-            lock.lock(); count += 1; lock.unlock()
+        private var maxPeak: Float = 0
+        func record(buffer: AVAudioPCMBuffer) {
+            var peak: Float = 0
+            if let channelData = buffer.floatChannelData {
+                let samples = UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength))
+                for sample in samples {
+                    let absSample = abs(sample)
+                    if absSample > peak { peak = absSample }
+                }
+            } else if let channelData = buffer.int16ChannelData {
+                let samples = UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength))
+                for sample in samples {
+                    let absSample = abs(Float(sample) / Float(Int16.max))
+                    if absSample > peak { peak = absSample }
+                }
+            }
+            lock.lock()
+            count += 1
+            if peak > maxPeak { maxPeak = peak }
+            lock.unlock()
         }
 
-        func value() -> Int {
-            lock.lock(); defer { lock.unlock() }; return count
+        func snapshot() -> (count: Int, maxPeak: Float) {
+            lock.lock(); defer { lock.unlock() }
+            return (count, maxPeak)
         }
     }
 
@@ -196,7 +215,7 @@ enum PermissionHealthCheck {
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
+        let format = inputNode.inputFormat(forBus: 0)
 
         guard format.sampleRate > 0, format.channelCount > 0 else {
             debugLog("probeMicrophone: invalid format sampleRate=\(format.sampleRate) " +
@@ -206,7 +225,7 @@ enum PermissionHealthCheck {
 
         let counter = BufferCounter()
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            if buffer.frameLength > 0 { counter.increment() }
+            if buffer.frameLength > 0 { counter.record(buffer: buffer) }
         }
 
         do {
@@ -220,18 +239,18 @@ enum PermissionHealthCheck {
         // Poll until the first buffer arrives or the timeout elapses.
         let deadline = Date().addingTimeInterval(probeTimeout)
         let startedAt = Date()
-        while counter.value() == 0, Date() < deadline {
+        while counter.snapshot().count == 0, Date() < deadline {
             try? await Task.sleep(for: .seconds(probePollInterval))
         }
         let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
-        let buffersSeen = counter.value()
+        let stats = counter.snapshot()
 
         engine.stop()
         inputNode.removeTap(onBus: 0)
 
-        debugLog("probeMicrophone: buffers=\(buffersSeen) elapsed=\(elapsedMs)ms " +
+        debugLog("probeMicrophone: buffers=\(stats.count) peak=\(stats.maxPeak) elapsed=\(elapsedMs)ms " +
             "sampleRate=\(format.sampleRate) channels=\(format.channelCount)")
-        return buffersSeen > 0
+        return stats.count > 0 && stats.maxPeak > 0.0001
     }
 
     static func checkMicrophoneLive() async -> PermissionStatus {
