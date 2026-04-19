@@ -265,6 +265,7 @@ class PipelineQueue {
             // Segments cached for potential diarization reuse (avoids double transcription)
             var cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
             let isDualSource = appPath != nil && micPath != nil
+            let silenceRmsThreshold: Float = 0.0005
             if let appAudioPath = appPath, let micAudioPath = micPath {
                 // Dual-source: resample both tracks to 16kHz concurrently
                 let app16k = workDir.appendingPathComponent("app_16k.wav")
@@ -273,6 +274,18 @@ class PipelineQueue {
                 async let micResample: Void = AudioMixer.resampleFile(from: micAudioPath, to: mic16k)
                 try await appResample
                 try await micResample
+
+                let appSamples = try AudioMixer.loadAudioFileAsFloat32(url: app16k)
+                let micSamples = try AudioMixer.loadAudioFileAsFloat32(url: mic16k)
+                let appRms = AudioMixer.rmsLevel(samples: appSamples)
+                let micRms = AudioMixer.rmsLevel(samples: micSamples)
+                if appRms < silenceRmsThreshold, micRms < silenceRmsThreshold {
+                    updateJobState(id: jobID, to: .error, error: "Silent audio chunk")
+                    stopElapsedTimer()
+                    isProcessing = false
+                    triggerProcessing()
+                    return
+                }
 
                 // Transcribe each track separately
                 let appSegments = try await engine.transcribeSegments(audioPath: app16k)
@@ -291,6 +304,16 @@ class PipelineQueue {
                 // Single-source: resample mix to 16kHz
                 let mix16k = workDir.appendingPathComponent("mix_16k.wav")
                 try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
+
+                let mixSamples = try AudioMixer.loadAudioFileAsFloat32(url: mix16k)
+                let mixRms = AudioMixer.rmsLevel(samples: mixSamples)
+                if mixRms < silenceRmsThreshold {
+                    updateJobState(id: jobID, to: .error, error: "Silent audio chunk")
+                    stopElapsedTimer()
+                    isProcessing = false
+                    triggerProcessing()
+                    return
+                }
 
                 // Optional VAD preprocessing: trim silence before transcription
                 var vadMap: VadSegmentMap?

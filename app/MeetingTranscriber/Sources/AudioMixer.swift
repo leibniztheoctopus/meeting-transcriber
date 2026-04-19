@@ -153,6 +153,15 @@ enum AudioMixer {
         }
     }
 
+    static func rmsLevel(samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sumSq: Float = 0
+        for sample in samples {
+            sumSq += sample * sample
+        }
+        return sqrt(sumSq / Float(samples.count))
+    }
+
     // MARK: - Resampling
 
     /// Resample audio using AVAudioConverter (proper anti-aliasing filter).
