@@ -78,6 +78,34 @@ public class MicCaptureHandler {
         return deviceID
     }
 
+    private static func defaultInputDeviceID() -> AudioDeviceID {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain,
+        )
+        var deviceID: AudioDeviceID = kAudioObjectUnknown
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address, 0, nil,
+            &size, &deviceID
+        )
+        return status == noErr ? deviceID : kAudioObjectUnknown
+    }
+
+    private static func stringProperty(deviceID: AudioDeviceID, selector: AudioObjectPropertySelector) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain,
+        )
+        var value: CFString = "" as CFString
+        var size = UInt32(MemoryLayout<CFString>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &value)
+        return status == noErr ? (value as String) : nil
+    }
+
     public func start(deviceUID: String? = nil) throws {
         selectedDeviceUID = deviceUID
         micDebugLog("start requested: output=\(outputURL.lastPathComponent) selectedUID=\(deviceUID ?? "default")")
@@ -116,9 +144,19 @@ public class MicCaptureHandler {
             }
         }
 
-        let hwFormat = inputNode.outputFormat(forBus: 0)
+        let defaultDeviceID = Self.defaultInputDeviceID()
+        if defaultDeviceID != kAudioObjectUnknown {
+            let defaultUID = Self.stringProperty(deviceID: defaultDeviceID, selector: kAudioDevicePropertyDeviceUID) ?? "unknown"
+            let defaultName = Self.stringProperty(deviceID: defaultDeviceID, selector: kAudioObjectPropertyName) ?? "unknown"
+            micDebugLog("default input device: name=\(defaultName) uid=\(defaultUID) id=\(defaultDeviceID)")
+        }
+
+        let hwFormat = inputNode.inputFormat(forBus: 0)
         logger.info("Mic hardware format: \(hwFormat.sampleRate) Hz, \(hwFormat.channelCount)ch")
-        micDebugLog("hardware format: rate=\(hwFormat.sampleRate) channels=\(hwFormat.channelCount)")
+        micDebugLog("hardware input format: rate=\(hwFormat.sampleRate) channels=\(hwFormat.channelCount)")
+
+        let engineFormat = inputNode.outputFormat(forBus: 0)
+        micDebugLog("engine output format: rate=\(engineFormat.sampleRate) channels=\(engineFormat.channelCount)")
 
         let tapFormat = AVAudioFormat(
             standardFormatWithSampleRate: hwFormat.sampleRate, channels: 1,
